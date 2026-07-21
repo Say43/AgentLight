@@ -1,0 +1,24 @@
+# Model weights / adapters — never committed (large, and license-encumbered
+# base weights must not be redistributed). See checkpoints/README.md.
+checkpoints/**/*.pt
+checkpoints/**/*.safetensors
+checkpoints/**/*.bin
+checkpoints/**/adapter_model*
+checkpoints/**/optimizer*
+checkpoints/**/*.gguf
+
+# Data — downloaded at runtime, not vendored.
+data/cache/
+data/*.jsonl
+data/*.arrow
+*.parquet
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# Local secrets / kaggle creds
+kaggle.json
+.env
