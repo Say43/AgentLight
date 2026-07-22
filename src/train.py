@@ -201,17 +201,27 @@ def run_sft(cfg, model, tokenizer, phase, dataset):
         # from SFTTrainer to SFTConfig. Feature detection keeps the pinned
         # baseline and future deliberate upgrades on the same code path.
         "dataset_text_field": "text",
-        # max_length=None, not cfg.model.max_seq_length: the current TRL
-        # defaults padding_free=True, and combining that with packing=False
-        # plus a non-None max_length is a hard error ("max_length is not
-        # enforced ... provide already truncated inputs, or set
-        # max_length=None" -- v6 smoke run). We already drop every row over
-        # cfg.model.max_seq_length tokens above (same tokenizer), so the
-        # inputs reaching the trainer are already truncated to budget; no
-        # further enforcement is needed here.
+        # The current TRL defaults padding_free=True, which combined with
+        # packing=False and *any* non-None effective max length is a hard
+        # error ("max_length is not enforced ... provide already truncated
+        # inputs, or set max_length=None"). Two smoke-run rounds needed to
+        # fully close this: v6 set max_length=None but left the deprecated
+        # max_seq_length alias at a real value in this SAME dict -- SFTConfig
+        # apparently treats it as a legacy alias and re-derives a non-None
+        # effective max_length from it internally, reproducing the identical
+        # error (v7/v8, after removing an unrelated *trainer*-level
+        # duplicate that turned out not to be the actual cause). Setting
+        # BOTH keys to None, plus explicitly forcing padding_free=False
+        # (belt-and-suspenders -- we don't want padding-free batching at all
+        # given we pre-filter to a fixed max length), closes every path that
+        # could resurrect a non-None max length here. We already drop every
+        # row over cfg.model.max_seq_length tokens above (same tokenizer),
+        # so the inputs reaching the trainer are already truncated to
+        # budget; no further enforcement is needed.
         "max_length": None,
-        "max_seq_length": cfg.model.max_seq_length,
+        "max_seq_length": None,
         "packing": False,
+        "padding_free": False,
     }
     sft_args = SFTConfig(**_supported_kwargs(SFTConfig, sft_config_kwargs))
     trainer_kwargs = {
