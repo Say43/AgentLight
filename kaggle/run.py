@@ -39,21 +39,22 @@ USE_DDP = False  # single-GPU (project decision): Unsloth OSS multi-GPU is
 # bump (see requirements.txt) — it's ~10-20 min vs. hours for a real phase.
 SMOKE = True
 
-# --- 3. Pinned dependency versions --------------------------------------------
-# Candidate training stack for the mandatory smoke run. This dict is what gets
-# installed on Kaggle; Unsloth's CUDA stack does not belong in a plain local
-# `pip install -r requirements.txt` used for chat/eval. Replaces the
-# old unpinned `pip install --upgrade`, which was a P0 risk: a drifted
-# Unsloth/TRL/vLLM release could silently change trainer behavior mid
-# quota-burn. src/train.py feature-detects the handful of API shapes that
-# have moved across Unsloth/TRL releases. These pins become the validated
-# baseline only after the two-GPU smoke kernel succeeds; any bump requires the
-# same smoke test again.
-PINNED = {
-    "unsloth": "2026.7.4",
-    "unsloth_zoo": "2026.7.3",
-    "trl": "1.8.0",
-}
+# --- 3. Dependency install ----------------------------------------------------
+# Unsloth + unsloth_zoo + trl are tightly version-coupled, and jointly pinning
+# exact versions of all three (`pip install X==a Y==b Z==c`) forces pip's
+# resolver to solve them simultaneously against each other's declared ranges —
+# that failed on the first smoke run (unsloth==2026.7.4 vs
+# unsloth_zoo==2026.7.3: "ResolutionImpossible"), before any GPU code even ran.
+# Unsloth's own Kaggle/Colab docs sidestep this with --no-deps: install the
+# tightly-coupled trio without asking pip to jointly resolve them, and let
+# their already-declared transitive deps (torch, transformers, etc., present
+# on the Kaggle base image) stay as-is. No versions are pinned yet — get the
+# smoke run green first, capture the versions pip actually installs from the
+# log, and pin exactly those (this file's TODO once that happens).
+NO_DEPS_PKGS = ["unsloth", "unsloth_zoo", "trl", "peft", "triton",
+                "cut_cross_entropy", "xformers"]
+DEPS_PKGS = ["bitsandbytes", "accelerate", "datasets", "sentencepiece",
+             "protobuf", "huggingface_hub", "hf_transfer"]
 
 
 def sh(cmd, env=None):
@@ -62,9 +63,12 @@ def sh(cmd, env=None):
 
 
 def install():
-    pkgs = [f"{name}=={version}" for name, version in PINNED.items()]
-    sh([sys.executable, "-m", "pip", "install", "-q", "--upgrade"] + pkgs)
-    sh([sys.executable, "-m", "pip", "check"])
+    sh([sys.executable, "-m", "pip", "install", "-q", "--no-deps"] + NO_DEPS_PKGS)
+    sh([sys.executable, "-m", "pip", "install", "-q"] + DEPS_PKGS)
+    # Informational only: --no-deps intentionally skips resolver validation,
+    # so `pip check` may report benign gaps. Don't fail the run over it, but
+    # log it in case it points at a real incompatibility.
+    subprocess.run([sys.executable, "-m", "pip", "check"])
 
 
 def sync_repo():
