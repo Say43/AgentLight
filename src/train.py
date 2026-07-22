@@ -201,7 +201,15 @@ def run_sft(cfg, model, tokenizer, phase, dataset):
         # from SFTTrainer to SFTConfig. Feature detection keeps the pinned
         # baseline and future deliberate upgrades on the same code path.
         "dataset_text_field": "text",
-        "max_length": cfg.model.max_seq_length,
+        # max_length=None, not cfg.model.max_seq_length: the current TRL
+        # defaults padding_free=True, and combining that with packing=False
+        # plus a non-None max_length is a hard error ("max_length is not
+        # enforced ... provide already truncated inputs, or set
+        # max_length=None" -- v6 smoke run). We already drop every row over
+        # cfg.model.max_seq_length tokens above (same tokenizer), so the
+        # inputs reaching the trainer are already truncated to budget; no
+        # further enforcement is needed here.
+        "max_length": None,
         "max_seq_length": cfg.model.max_seq_length,
         "packing": False,
     }
