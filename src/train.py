@@ -45,6 +45,36 @@ def _supported_kwargs(callable_obj, kwargs):
     return {key: value for key, value in kwargs.items() if key in params}
 
 
+_UNEXPECTED_KW = re.compile(r"unexpected keyword argument '([^']+)'")
+
+
+def _build_dropping_unknown(factory, kwargs, label):
+    """Construct factory(**kwargs), dropping kwargs the installed API rejects.
+
+    _supported_kwargs() can't help when a class declares **kwargs in its
+    signature (e.g. TRL's GRPOConfig/GRPOTrainer): every key passes the
+    inspection, then the real __init__ raises "unexpected keyword argument
+    'X'" for one that moved/was removed between TRL versions (v9 smoke run:
+    GRPOConfig no longer accepts 'max_prompt_length'). Rather than hard-code
+    which keys each pinned version wants, start from the filtered kwargs and
+    iteratively drop whatever the constructor complains about, logging each
+    drop so a real typo is still visible. Bounded by the number of kwargs.
+    """
+    kwargs = dict(_supported_kwargs(factory, kwargs))
+    for _ in range(len(kwargs) + 1):
+        try:
+            return factory(**kwargs)
+        except TypeError as e:
+            m = _UNEXPECTED_KW.search(str(e))
+            if not m or m.group(1) not in kwargs:
+                raise
+            dropped = m.group(1)
+            kwargs.pop(dropped)
+            print(f"[compat] {label}: dropped unsupported kwarg "
+                  f"'{dropped}' for the installed TRL version", flush=True)
+    return factory(**kwargs)
+
+
 def _is_main_process():
     return int(os.environ.get("RANK", "0")) == 0
 
@@ -539,17 +569,21 @@ def run_grpo(cfg, model, tokenizer, phase, dataset):
         "mask_truncated_completions": True,
         "log_completions": True,
     }
-    grpo_args = GRPOConfig(**_supported_kwargs(GRPOConfig, grpo_config_kwargs))
+    grpo_args = _build_dropping_unknown(GRPOConfig, grpo_config_kwargs, "GRPOConfig")
     trainer_kwargs = {
         "model": model,
+        # Newer TRL renamed tokenizer -> processing_class. Pass processing_class
+        # (current) and let _build_dropping_unknown drop it on older TRL that
+        # still wants tokenizer; the SFT path proved processing_class is the
+        # current name, so lead with it and omit the legacy alias to avoid
+        # passing both.
         "processing_class": tokenizer,
-        "tokenizer": tokenizer,
         "reward_funcs": [correctness_reward, format_reward],
         "train_dataset": dataset,
         "args": grpo_args,
         "callbacks": [RolloutMetricsCallback(_ACTIVE_GRPO_METRICS)],
     }
-    trainer = GRPOTrainer(**_supported_kwargs(GRPOTrainer, trainer_kwargs))
+    trainer = _build_dropping_unknown(GRPOTrainer, trainer_kwargs, "GRPOTrainer")
     resume = os.path.isdir(out) and any(
         d.startswith("checkpoint-") for d in os.listdir(out))
     try:
