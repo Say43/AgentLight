@@ -227,10 +227,16 @@ def run_sft(cfg, model, tokenizer, phase, dataset):
     # Compatibility with older TRL where these were trainer kwargs.
     if "dataset_text_field" in trainer_params:
         trainer_kwargs["dataset_text_field"] = "text"
-    if "max_seq_length" in trainer_params:
-        trainer_kwargs["max_seq_length"] = cfg.model.max_seq_length
     if "packing" in trainer_params:
         trainer_kwargs["packing"] = False
+    # No max_seq_length re-injection here (unlike dataset_text_field/packing,
+    # which just duplicate an identical value already in sft_args): v7 smoke
+    # run reproduced the exact same padding_free/max_length ValueError even
+    # after sft_args.max_length was set to None, because Unsloth's SFTTrainer
+    # wrapper accepts this legacy direct kwarg and uses it to reconstruct a
+    # non-None effective max_length internally, silently overriding the
+    # SFTConfig-level setting above. Leave truncation control entirely to
+    # sft_args (max_length=None there, backed by our own pre-filter).
     trainer = SFTTrainer(**trainer_kwargs)
     # Assistant-only loss (GPTlight SFT lesson: don't train on the user turns).
     trainer = train_on_responses_only(
