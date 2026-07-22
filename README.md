@@ -21,13 +21,14 @@ It's a standalone sibling to the earlier `GPTlight` project (which trained a
 
 ## Pipeline
 
-1. **Reasoning-SFT** — teach the `<think>…</think>` long-chain-of-thought
-   format on R1-distilled reasoning traces (`open-thoughts/OpenThoughts-114k`,
-   Apache-2.0).
-2. **General-SFT** — keep it a usable assistant (`HuggingFaceTB/smoltalk`,
-   Apache-2.0), assistant-only loss.
+1. **Reasoning-SFT** — teach the `<think>…</think>` format on the verified
+   **code subset** of R1-distilled OpenThoughts metadata, with overlong rows
+   removed before training (`open-thoughts/OpenThoughts-114k`, Apache-2.0).
+2. **General-SFT replay** — a smaller/lower-LR assistant replay phase
+   (`HuggingFaceTB/smoltalk`, Apache-2.0), assistant-only loss.
 3. **GRPO** — reinforcement learning with a **verifiable reward**: generate
-   code, execute it against MBPP unit tests, reward = fraction of tests passed.
+   code, show one public MBPP interface example, and reward only against the
+   remaining held-out tests.
    This is the RLVR recipe that made reasoning models strong at code.
 
 Then an inference-time **ReAct loop** ([agent/react_agent.py](agent/react_agent.py))
@@ -57,11 +58,14 @@ kaggle kernels push -p kaggle
 ```
 Set the accelerator to **GPU T4 x2**. The run resumes automatically across
 sessions — see [docs/PLAN.md](docs/PLAN.md) and [checkpoints/README.md](checkpoints/README.md).
+Run the two-GPU smoke procedure in [HANDOFF.md](HANDOFF.md) before committing
+the full quota.
 
 **Evaluate** (the RESULTS story):
 ```
 python src/eval_code.py --adapter checkpoints/grpo --n 60
 python src/eval_code.py --adapter checkpoints/grpo --n 60 --agentic
+python src/eval_code.py --adapter checkpoints/grpo --n 164 --tts --k 4
 ```
 
 **Chat / solve locally:**

@@ -56,7 +56,10 @@ class DataConfig:
     # and explicitly permits distillation; this HF dataset is Apache-2.0.
     # Teaches the <think>...</think> reasoning format.
     reasoning_sft_hf: str = "open-thoughts/OpenThoughts-114k"
+    reasoning_sft_config: str = "metadata"
     reasoning_sft_split: str = "train"
+    reasoning_sft_domain: str = "code"
+    shuffle_seed: int = 3407
 
     # General SFT. smoltalk is Apache-2.0 (broad instruction/chat) — keeps the
     # model a usable assistant, not only a code emitter.
@@ -73,9 +76,9 @@ class DataConfig:
 
     # How many examples to actually use per phase (budget control, not the
     # full corpora — 16h does not fit millions of rows).
-    reasoning_sft_max_samples: int = 18_000
-    general_sft_max_samples: int = 12_000
-    grpo_max_samples: int = 600          # MBPP "full" train is ~374 tasks
+    reasoning_sft_max_samples: int = 12_000
+    general_sft_max_samples: int = 4_000
+    grpo_max_samples: int = 374          # MBPP "full" train has 374 tasks
 
 
 # ---------------------------------------------------------------------------
@@ -106,22 +109,22 @@ class TrainConfig:
     # think in long CoT, then general instruction/tool behavior, then sharpen
     # reasoning with RL on verifiable rewards).
     reasoning_sft: PhaseConfig = field(default_factory=lambda: PhaseConfig(
-        name="reasoning_sft", max_steps=1200,
+        name="reasoning_sft", max_steps=600,
         per_device_train_batch_size=2, gradient_accumulation_steps=8,
         learning_rate=2e-4))
     general_sft: PhaseConfig = field(default_factory=lambda: PhaseConfig(
-        name="general_sft", max_steps=900,
+        name="general_sft", max_steps=250,
         per_device_train_batch_size=2, gradient_accumulation_steps=8,
-        learning_rate=2e-4))
+        learning_rate=1e-4))
     grpo: PhaseConfig = field(default_factory=lambda: PhaseConfig(
-        name="grpo", max_steps=400,
+        name="grpo", max_steps=200,
         per_device_train_batch_size=1, gradient_accumulation_steps=4,
         learning_rate=5e-6, warmup_ratio=0.1, save_steps=50))
 
     # GRPO-specific
     grpo_num_generations: int = 4       # rollouts per prompt (T4-friendly)
     grpo_max_prompt_length: int = 640
-    grpo_max_completion_length: int = 1024   # code + reasoning needs room
+    grpo_max_completion_length: int = 512
 
 
 @dataclass
@@ -138,7 +141,39 @@ def on_kaggle() -> bool:
     return os.path.isdir("/kaggle/input")
 
 
+def _apply_smoke_overrides(cfg: Config) -> None:
+    """Shrink every phase while preserving the real code paths and APIs."""
+    if os.environ.get("AGENTLIGHT_SMOKE", "").lower() not in {"1", "true", "yes"}:
+        return
+    cfg.data.reasoning_sft_max_samples = 24
+    cfg.data.general_sft_max_samples = 24
+    cfg.data.grpo_max_samples = 16
+    cfg.train.reasoning_sft.max_steps = 5
+    cfg.train.general_sft.max_steps = 5
+    cfg.train.grpo.max_steps = 3
+    cfg.train.reasoning_sft.save_steps = 5
+    cfg.train.general_sft.save_steps = 5
+    cfg.train.grpo.save_steps = 3
+    cfg.train.grpo_max_completion_length = 128
+
+
+def _apply_distributed_overrides(cfg: Config) -> None:
+    """Preserve the configured global batch when torchrun uses two GPUs."""
+    world_size = max(1, int(os.environ.get("WORLD_SIZE", "1")))
+    if world_size == 1:
+        return
+    for phase in (
+        cfg.train.reasoning_sft,
+        cfg.train.general_sft,
+        cfg.train.grpo,
+    ):
+        phase.gradient_accumulation_steps = max(
+            1, phase.gradient_accumulation_steps // world_size)
+
+
 CONFIG = Config()
+_apply_smoke_overrides(CONFIG)
+_apply_distributed_overrides(CONFIG)
 
 
 if __name__ == "__main__":

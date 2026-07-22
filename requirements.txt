@@ -1,11 +1,23 @@
-# AgentLight — local inference / eval deps.
-# On Kaggle the notebook installs unsloth + trl fresh (see kaggle/run.py);
-# this file targets a local machine for chat + evaluation against a checkpoint.
+# AgentLight — local inference/evaluation requirements.
+#
+# The Kaggle training entrypoint pins its GPU stack separately and smoke-tests
+# it end-to-end before the real run. Do not treat this file as a CUDA lockfile.
+
+# --- Local inference / eval / chat deps (chat/local_chat.py, src/eval_code.py) ---
+# CPU or any CUDA box; no vLLM/Unsloth required for inference-only use.
 torch>=2.3
 transformers>=4.44
-peft>=0.12
-accelerate>=0.33
-datasets>=2.20
-trl>=0.11
-# unsloth is optional locally (needed for training, heavy on Windows).
-# Install per https://github.com/unslothai/unsloth for your CUDA version.
+peft>=0.17.1
+accelerate>=1.10.1
+datasets>=3.6.0
+trl==1.8.0
+
+# --- Kaggle training stack (GPU/CUDA-only, Linux-only for vLLM) -----------------
+# NOT installed by a plain `pip install -r requirements.txt` (heavy, and
+# Unsloth's optimized stack is CUDA specific — it would fail or be dead
+# weight on a local Windows/CPU chat box). kaggle/run.py installs these
+# directly, pinned to the exact versions below, so they stay in sync with this
+# lockfile. If you want to train locally on your own CUDA box, install per
+# https://github.com/unslothai/unsloth for your CUDA version, matching these:
+#   unsloth==2026.7.4
+#   unsloth_zoo==2026.7.3

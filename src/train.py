@@ -22,6 +22,8 @@ LESSONS BAKED IN FROM THE GPTlight PROJECT
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
+import inspect
 import json
 import os
 import sys
@@ -32,6 +34,24 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.config import CONFIG, on_kaggle           # noqa: E402
 from data.prepare_data import LOADERS, CODE_SYSTEM_PROMPT  # noqa: E402
+
+
+def _supported_kwargs(callable_obj, kwargs):
+    """Keep only kwargs supported by the installed TRL API shape."""
+    params = inspect.signature(callable_obj).parameters
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key in params}
+
+
+def _is_main_process():
+    return int(os.environ.get("RANK", "0")) == 0
+
+
+def _distributed_barrier():
+    import torch
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.barrier()
 
 
 # ---------------------------------------------------------------------------
@@ -123,31 +143,74 @@ def run_sft(cfg, model, tokenizer, phase, dataset):
 
     dataset = dataset.map(fmt, batched=True, remove_columns=dataset.column_names)
 
-    out = phase_dir(cfg, phase.name)
-    trainer = SFTTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataset=dataset,
-        dataset_text_field="text",
-        max_seq_length=cfg.model.max_seq_length,
-        packing=False,
-        args=SFTConfig(
-            output_dir=out,
-            per_device_train_batch_size=phase.per_device_train_batch_size,
-            gradient_accumulation_steps=phase.gradient_accumulation_steps,
-            warmup_ratio=phase.warmup_ratio,
-            max_steps=phase.max_steps,
-            learning_rate=phase.learning_rate,
-            lr_scheduler_type=phase.lr_scheduler_type,
-            logging_steps=phase.logging_steps,
-            save_steps=phase.save_steps,
-            save_total_limit=2,
-            optim="adamw_8bit",
-            weight_decay=0.01,
-            seed=cfg.train.seed,
-            report_to="none",
-        ),
+    # Long reasoning traces are right-truncated by SFTTrainer. If the final
+    # code is cut off, the label teaches exactly the wrong behaviour, so drop
+    # overlong rows before training and report how much data was affected.
+    def add_lengths(batch):
+        encoded = tokenizer(
+            batch["text"], add_special_tokens=False, truncation=False)
+        return {"token_length": [len(ids) for ids in encoded["input_ids"]]}
+
+    dataset = dataset.map(add_lengths, batched=True, batch_size=64)
+    before = len(dataset)
+    dataset = dataset.filter(
+        lambda length: length <= cfg.model.max_seq_length,
+        input_columns=["token_length"],
     )
+    removed = before - len(dataset)
+    print(f"[data] {phase.name}: removed {removed}/{before} overlong rows "
+          f"(>{cfg.model.max_seq_length} tokens)", flush=True)
+    if not len(dataset):
+        raise RuntimeError(f"{phase.name}: no rows remain after length filtering")
+    dataset = dataset.remove_columns(["token_length"])
+
+    out = phase_dir(cfg, phase.name)
+    import torch
+    bf16 = bool(torch.cuda.is_bf16_supported())
+    sft_config_kwargs = {
+        "output_dir": out,
+        "per_device_train_batch_size": phase.per_device_train_batch_size,
+        "gradient_accumulation_steps": phase.gradient_accumulation_steps,
+        "warmup_ratio": phase.warmup_ratio,
+        "max_steps": phase.max_steps,
+        "learning_rate": phase.learning_rate,
+        "lr_scheduler_type": phase.lr_scheduler_type,
+        "logging_steps": phase.logging_steps,
+        "save_steps": phase.save_steps,
+        "save_total_limit": 2,
+        "optim": "adamw_8bit",
+        "weight_decay": 0.01,
+        "seed": cfg.train.seed,
+        "report_to": "none",
+        "fp16": not bf16,
+        "bf16": bf16,
+        # TRL renamed max_seq_length -> max_length and moved these fields
+        # from SFTTrainer to SFTConfig. Feature detection keeps the pinned
+        # baseline and future deliberate upgrades on the same code path.
+        "dataset_text_field": "text",
+        "max_length": cfg.model.max_seq_length,
+        "max_seq_length": cfg.model.max_seq_length,
+        "packing": False,
+    }
+    sft_args = SFTConfig(**_supported_kwargs(SFTConfig, sft_config_kwargs))
+    trainer_kwargs = {
+        "model": model,
+        "train_dataset": dataset,
+        "args": sft_args,
+    }
+    trainer_params = inspect.signature(SFTTrainer).parameters
+    if "processing_class" in trainer_params:
+        trainer_kwargs["processing_class"] = tokenizer
+    else:
+        trainer_kwargs["tokenizer"] = tokenizer
+    # Compatibility with older TRL where these were trainer kwargs.
+    if "dataset_text_field" in trainer_params:
+        trainer_kwargs["dataset_text_field"] = "text"
+    if "max_seq_length" in trainer_params:
+        trainer_kwargs["max_seq_length"] = cfg.model.max_seq_length
+    if "packing" in trainer_params:
+        trainer_kwargs["packing"] = False
+    trainer = SFTTrainer(**trainer_kwargs)
     # Assistant-only loss (GPTlight SFT lesson: don't train on the user turns).
     trainer = train_on_responses_only(
         trainer,
@@ -157,9 +220,11 @@ def run_sft(cfg, model, tokenizer, phase, dataset):
     resume = os.path.isdir(out) and any(
         d.startswith("checkpoint-") for d in os.listdir(out))
     trainer.train(resume_from_checkpoint=resume)
-    model.save_pretrained(out)
-    tokenizer.save_pretrained(out)
-    print(f"[sft] {phase.name} done -> {out}", flush=True)
+    if _is_main_process():
+        model.save_pretrained(out)
+        tokenizer.save_pretrained(out)
+        print(f"[sft] {phase.name} done -> {out}", flush=True)
+    _distributed_barrier()
 
 
 # ---------------------------------------------------------------------------
@@ -174,11 +239,20 @@ def correctness_reward(prompts, completions, tests=None, setup=None, **kw):
     from agent.executor import extract_code, score_solution
     tests = tests or [[] for _ in completions]
     setup = setup or ["" for _ in completions]
-    rewards = []
+    jobs = []
     for comp, t, s in zip(completions, tests, setup):
         code = extract_code(_completion_text(comp))
-        rewards.append(3.0 * score_solution(code, t, s))
-    return rewards
+        jobs.append((code, t, s))
+
+    # Each score launches isolated test subprocesses. Run completion groups in
+    # parallel so slow/timeout candidates do not serialize an entire GRPO step.
+    def score(job):
+        code, test_list, test_setup = job
+        return 3.0 * score_solution(code, test_list, test_setup, timeout=3.0)
+
+    workers = max(1, min(4, len(jobs)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(score, jobs))
 
 
 def format_reward(prompts, completions, **kw):
@@ -200,35 +274,52 @@ def run_grpo(cfg, model, tokenizer, phase, dataset):
     from trl import GRPOConfig, GRPOTrainer
 
     out = phase_dir(cfg, phase.name)
-    trainer = GRPOTrainer(
-        model=model,
-        processing_class=tokenizer,
-        reward_funcs=[correctness_reward, format_reward],
-        train_dataset=dataset,
-        args=GRPOConfig(
-            output_dir=out,
-            per_device_train_batch_size=phase.per_device_train_batch_size,
-            gradient_accumulation_steps=phase.gradient_accumulation_steps,
-            num_generations=cfg.train.grpo_num_generations,
-            max_prompt_length=cfg.train.grpo_max_prompt_length,
-            max_completion_length=cfg.train.grpo_max_completion_length,
-            max_steps=phase.max_steps,
-            learning_rate=phase.learning_rate,
-            lr_scheduler_type=phase.lr_scheduler_type,
-            warmup_ratio=phase.warmup_ratio,
-            logging_steps=phase.logging_steps,
-            save_steps=phase.save_steps,
-            optim="adamw_8bit",
-            seed=cfg.train.seed,
-            report_to="none",
-        ),
-    )
+    import torch
+    bf16 = bool(torch.cuda.is_bf16_supported())
+    grpo_config_kwargs = {
+        "output_dir": out,
+        "per_device_train_batch_size": phase.per_device_train_batch_size,
+        "gradient_accumulation_steps": phase.gradient_accumulation_steps,
+        "num_generations": cfg.train.grpo_num_generations,
+        "max_prompt_length": cfg.train.grpo_max_prompt_length,
+        "max_completion_length": cfg.train.grpo_max_completion_length,
+        "max_steps": phase.max_steps,
+        "learning_rate": phase.learning_rate,
+        "lr_scheduler_type": phase.lr_scheduler_type,
+        "warmup_ratio": phase.warmup_ratio,
+        "logging_steps": phase.logging_steps,
+        "save_steps": phase.save_steps,
+        "save_total_limit": 2,
+        "optim": "adamw_8bit",
+        "max_grad_norm": 0.1,
+        "seed": cfg.train.seed,
+        "report_to": "none",
+        "fp16": not bf16,
+        "bf16": bf16,
+        # DAPO stability/sample-efficiency components supported by recent TRL.
+        "loss_type": "dapo",
+        "epsilon_high": 0.28,
+        "mask_truncated_completions": True,
+        "log_completions": True,
+    }
+    grpo_args = GRPOConfig(**_supported_kwargs(GRPOConfig, grpo_config_kwargs))
+    trainer_kwargs = {
+        "model": model,
+        "processing_class": tokenizer,
+        "tokenizer": tokenizer,
+        "reward_funcs": [correctness_reward, format_reward],
+        "train_dataset": dataset,
+        "args": grpo_args,
+    }
+    trainer = GRPOTrainer(**_supported_kwargs(GRPOTrainer, trainer_kwargs))
     resume = os.path.isdir(out) and any(
         d.startswith("checkpoint-") for d in os.listdir(out))
     trainer.train(resume_from_checkpoint=resume)
-    model.save_pretrained(out)
-    tokenizer.save_pretrained(out)
-    print(f"[grpo] {phase.name} done -> {out}", flush=True)
+    if _is_main_process():
+        model.save_pretrained(out)
+        tokenizer.save_pretrained(out)
+        print(f"[grpo] {phase.name} done -> {out}", flush=True)
+    _distributed_barrier()
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +349,11 @@ def main():
     os.makedirs(cfg.train.output_root, exist_ok=True)
 
     state = load_state(cfg)
+    state_model = state.get("model_name")
+    if state_model and state_model != cfg.model.name:
+        raise RuntimeError(
+            f"Checkpoint model mismatch: state has {state_model!r}, "
+            f"config requests {cfg.model.name!r}")
     completed = set(state.get("completed", []))
 
     # Resume from the most recently completed phase's adapter, if any.
@@ -285,7 +381,9 @@ def main():
             run_sft(cfg, model, tokenizer, phase, dataset)
         completed.add(ph)
         state["completed"] = sorted(completed)
-        save_state(cfg, state)
+        if _is_main_process():
+            save_state(cfg, state)
+        _distributed_barrier()
 
     print("\n[done] pipeline finished:", sorted(completed), flush=True)
 

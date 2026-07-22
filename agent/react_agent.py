@@ -28,14 +28,23 @@ def load_model(adapter_dir: str):
         FastLanguageModel.for_inference(model)
         return model, tok
     except Exception:
+        import json
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from peft import PeftModel
+
         tok = AutoTokenizer.from_pretrained(adapter_dir)
-        peft_cfg = PeftModel.from_pretrained  # noqa
+        # adapter_dir holds a LoRA adapter, not a full model -- read its
+        # config to find the base model it was trained against, load that
+        # base, then attach the adapter on top of it.
+        cfg_path = os.path.join(adapter_dir, "adapter_config.json")
+        with open(cfg_path, encoding="utf-8") as f:
+            adapter_cfg = json.load(f)
+        base_name = adapter_cfg["base_model_name_or_path"]
         base = AutoModelForCausalLM.from_pretrained(
-            adapter_dir, torch_dtype=torch.float16, device_map="auto")
-        return base, tok
+            base_name, torch_dtype=torch.float16, device_map="auto")
+        model = PeftModel.from_pretrained(base, adapter_dir)
+        return model, tok
 
 
 def generate(model, tok, messages, max_new_tokens=1024, temperature=0.4):

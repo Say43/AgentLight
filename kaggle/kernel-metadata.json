@@ -1,7 +1,7 @@
 {
   "id": "say43/agentlight-train",
   "title": "AgentLight Train",
-  "code_file": "kaggle/run.py",
+  "code_file": "run.py",
   "language": "python",
   "kernel_type": "script",
   "is_private": true,
@@ -9,6 +9,5 @@
   "enable_internet": true,
   "dataset_sources": [],
   "competition_sources": [],
-  "kernel_sources": [],
-  "_comment": "Set accelerator to 'GPU T4 x2' in the notebook UI before running. There is no kernel-metadata field to pin T4-vs-P100, so src/train.py asserts the GPU at startup (GPTlight lesson: never silently fall back to CPU). To resume a run, add the previous session's output as a dataset_source and re-push."
+  "kernel_sources": []
 }
