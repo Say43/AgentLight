@@ -45,6 +45,15 @@ USE_DDP = False  # single-GPU (project decision): Unsloth OSS multi-GPU is
 # bump (see requirements.txt) — it's ~10-20 min vs. hours for a real phase.
 SMOKE = True
 
+# --- Mode: "train" runs the phase pipeline; "eval" runs HumanEval pass@1 on a
+# single model and prints the number (no training). Use "eval" with
+# EVAL_ADAPTER pointing at the base model for the "before" baseline, or at a
+# trained checkpoint dir for the "after". EVAL_N caps the number of HumanEval
+# tasks (164 = full benchmark).
+MODE = "eval"  # baseline run: HumanEval on the vanilla base model
+EVAL_ADAPTER = "unsloth/Llama-3.2-3B-Instruct"  # base model => baseline number
+EVAL_N = 40
+
 # --- 3. Dependency install ----------------------------------------------------
 # Unsloth + unsloth_zoo + trl are tightly version-coupled, and jointly pinning
 # exact versions of all three (`pip install X==a Y==b Z==c`) forces pip's
@@ -54,11 +63,18 @@ SMOKE = True
 # Unsloth's own Kaggle/Colab docs sidestep this with --no-deps: install the
 # tightly-coupled trio without asking pip to jointly resolve them, and let
 # their already-declared transitive deps (torch, transformers, etc., present
-# on the Kaggle base image) stay as-is. No versions are pinned yet — get the
-# smoke run green first, capture the versions pip actually installs from the
-# log, and pin exactly those (this file's TODO once that happens).
-NO_DEPS_PKGS = ["unsloth", "unsloth_zoo", "trl", "peft", "triton",
-                "cut_cross_entropy", "xformers"]
+# on the Kaggle base image) stay as-is.
+#
+# Top-level versions PINNED to the exact set that produced the first fully
+# green end-to-end smoke run (v11): unsloth 2026.7.4 + unsloth_zoo 2026.7.4 +
+# trl 1.9.0 (torch 2.10.0+cu128, transformers 5.0.0, datasets 5.0.0 come from
+# the Kaggle base image). --no-deps means these exact pins do NOT re-trigger
+# the resolver conflict that killed v1 (unsloth 2026.7.4 vs unsloth_zoo
+# 2026.7.3). peft/triton/cut_cross_entropy/xformers are left unpinned (lower
+# drift risk, and -q hid their exact versions); install() logs a full
+# `pip freeze` of the key packages so a later run can complete the lockfile.
+NO_DEPS_PKGS = ["unsloth==2026.7.4", "unsloth_zoo==2026.7.4", "trl==1.9.0",
+                "peft", "triton", "cut_cross_entropy", "xformers"]
 DEPS_PKGS = ["bitsandbytes", "accelerate", "datasets", "sentencepiece",
              "protobuf", "huggingface_hub", "hf_transfer",
              # The Kaggle base image ships torchao 0.10.0. We don't use
@@ -84,6 +100,22 @@ def install():
     # so `pip check` may report benign gaps. Don't fail the run over it, but
     # log it in case it points at a real incompatibility.
     subprocess.run([sys.executable, "-m", "pip", "check"])
+    # Record exact versions of the key packages so the log is a complete,
+    # reproducible manifest (the -q installs above hide them). This is how we
+    # finish pinning the transitive deps we couldn't read from the v11 log.
+    print("[versions] exact installed set:", flush=True)
+    subprocess.run(
+        [sys.executable, "-m", "pip", "freeze"],
+        stdout=subprocess.PIPE, text=True, check=False)
+    import importlib.metadata as im
+    for pkg in ["unsloth", "unsloth_zoo", "trl", "peft", "triton",
+                "cut_cross_entropy", "xformers", "torch", "torchao",
+                "bitsandbytes", "accelerate", "datasets", "transformers",
+                "vllm"]:
+        try:
+            print(f"[versions] {pkg}=={im.version(pkg)}", flush=True)
+        except im.PackageNotFoundError:
+            print(f"[versions] {pkg} (not installed)", flush=True)
 
 
 def sync_repo():
@@ -170,6 +202,15 @@ def main():
         restore_checkpoints(out_dir)
 
     sys.path.insert(0, REPO_DIR)
+
+    if MODE == "eval":
+        # Baseline / checkpoint HumanEval pass@1. Single GPU (T4), no training.
+        env = dict(os.environ)
+        env["CUDA_VISIBLE_DEVICES"] = "0"
+        sh([sys.executable, os.path.join(REPO_DIR, "src", "eval_code.py"),
+            "--adapter", EVAL_ADAPTER, "--n", str(EVAL_N)], env=env)
+        return
+
     sh(training_command(), env=os.environ)
 
 
