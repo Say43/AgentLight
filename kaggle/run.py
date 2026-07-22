@@ -43,14 +43,14 @@ USE_DDP = False  # single-GPU (project decision): Unsloth OSS multi-GPU is
 # reads to shrink the three phases to 13 total steps and cap datasets to a tiny
 # sample. Always smoke-test first on a fresh Kaggle image or dependency pin
 # bump (see requirements.txt) — it's ~10-20 min vs. hours for a real phase.
-SMOKE = True
+SMOKE = False  # REAL run (full phase steps + sample sizes). Smoke validated in v11.
 
 # --- Mode: "train" runs the phase pipeline; "eval" runs HumanEval pass@1 on a
 # single model and prints the number (no training). Use "eval" with
 # EVAL_ADAPTER pointing at the base model for the "before" baseline, or at a
 # trained checkpoint dir for the "after". EVAL_N caps the number of HumanEval
 # tasks (164 = full benchmark).
-MODE = "eval"  # baseline run: HumanEval on the vanilla base model
+MODE = "train"  # "train" runs the phase pipeline; "eval" = HumanEval only
 EVAL_ADAPTER = "unsloth/Llama-3.2-3B-Instruct"  # base model => baseline number
 EVAL_N = 40
 
@@ -74,18 +74,19 @@ EVAL_N = 40
 # drift risk, and -q hid their exact versions); install() logs a full
 # `pip freeze` of the key packages so a later run can complete the lockfile.
 NO_DEPS_PKGS = ["unsloth==2026.7.4", "unsloth_zoo==2026.7.4", "trl==1.9.0",
-                "peft", "triton", "cut_cross_entropy", "xformers"]
-DEPS_PKGS = ["bitsandbytes", "accelerate", "datasets", "sentencepiece",
-             "protobuf", "huggingface_hub", "hf_transfer",
+                "peft==0.19.1", "triton==3.6.0",
+                "cut_cross_entropy==25.1.1", "xformers==0.0.35"]
+DEPS_PKGS = ["bitsandbytes==0.49.2", "accelerate==1.13.0", "datasets==5.0.0",
+             "sentencepiece", "protobuf", "huggingface_hub", "hf_transfer",
              # The Kaggle base image ships torchao 0.10.0. We don't use
              # torchao quantization (bitsandbytes 4-bit is our QLoRA path),
              # but peft's adapter-injection step probes every quantization
              # backend it knows about, including torchao, and raises instead
              # of skipping when a too-old version is merely present (v4 smoke
              # run: "Found version 0.10.0, but only versions above 0.16.0 are
-             # supported"). A version floor forces pip to upgrade the
-             # preinstalled copy instead of reporting it "already satisfied".
-             "torchao>=0.16.0"]
+             # supported"). Pinned to the exact version from the green v11/v12
+             # runs; forces pip to upgrade the preinstalled 0.10.0 copy.
+             "torchao==0.17.0"]
 
 
 def sh(cmd, env=None):
