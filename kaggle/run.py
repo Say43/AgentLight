@@ -7,8 +7,14 @@ weekly-quota session cuts (pipeline_state.json + adapter checkpoints).
 Usage: push with the Kaggle CLI from the repo root:
     kaggle kernels push -p kaggle
 Attach a checkpoints dataset to resume a previous session (see
-checkpoints/README.md), and set the accelerator to **GPU T4 x2** in the
-notebook settings (the code asserts the GPU so a wrong assignment fails loud).
+checkpoints/README.md). GPU selection is forced via kernel-metadata.json's
+"machine_shape": "NvidiaTeslaT4" -- Kaggle has no API field to request T4x2
+specifically (only T4/P100/TPU), so a *single* T4 is what gets reserved; a
+lucky pool assignment may still hand out 2, but don't rely on it. Plain
+"enable_gpu": true left Kaggle free to hand out a P100 (compute capability
+6.0, unsupported by Unsloth) instead -- assert_gpu() catches that loudly if
+it ever happens again, but forcing machine_shape avoids wasting the queue
+wait on a doomed run in the first place.
 
 Run a smoke test first (flip SMOKE = True below) on any fresh image or
 dependency bump: ~10-20 min end-to-end (install -> data -> train -> save
