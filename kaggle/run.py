@@ -60,7 +60,16 @@ SMOKE = True
 NO_DEPS_PKGS = ["unsloth", "unsloth_zoo", "trl", "peft", "triton",
                 "cut_cross_entropy", "xformers"]
 DEPS_PKGS = ["bitsandbytes", "accelerate", "datasets", "sentencepiece",
-             "protobuf", "huggingface_hub", "hf_transfer"]
+             "protobuf", "huggingface_hub", "hf_transfer",
+             # The Kaggle base image ships torchao 0.10.0. We don't use
+             # torchao quantization (bitsandbytes 4-bit is our QLoRA path),
+             # but peft's adapter-injection step probes every quantization
+             # backend it knows about, including torchao, and raises instead
+             # of skipping when a too-old version is merely present (v4 smoke
+             # run: "Found version 0.10.0, but only versions above 0.16.0 are
+             # supported"). A version floor forces pip to upgrade the
+             # preinstalled copy instead of reporting it "already satisfied".
+             "torchao>=0.16.0"]
 
 
 def sh(cmd, env=None):
