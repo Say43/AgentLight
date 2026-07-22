@@ -65,10 +65,20 @@ def _sharegpt_to_messages(conv):
 # Reasoning SFT — R1-distilled long-CoT (open-thoughts/OpenThoughts-114k)
 # ---------------------------------------------------------------------------
 def load_reasoning_sft(cfg, n=None):
+    # No _split_for_budget() pre-slice here, unlike the other loaders: this
+    # dataset is grouped by domain in its stored row order (verified via HF's
+    # datasets-server statistics endpoint: 89,120 "math" rows before the
+    # 19,904 "code" rows out of 113,957 total), so a smoke-mode index slice
+    # like "train[:100]" lands entirely inside the math block and the domain
+    # filter below zeroes out every row (confirmed: smoke run v5 crashed with
+    # exactly this). The full "metadata" config is small regardless (~16s to
+    # generate on Kaggle, confirmed in the same run's log), so loading it
+    # unsliced and filtering+shuffling+capping afterward is cheap and correct
+    # in both smoke and real mode.
     ds = load_dataset(
         cfg.reasoning_sft_hf,
         cfg.reasoning_sft_config,
-        split=_split_for_budget(cfg.reasoning_sft_split, n),
+        split=cfg.reasoning_sft_split,
     )
     # The source mixes code, math, science and puzzles. AgentLight's system
     # contract always asks for Python, so training on the non-code rows creates
@@ -79,6 +89,11 @@ def load_reasoning_sft(cfg, n=None):
         ds = ds.filter(lambda ex: str(ex.get("domain", "")).lower() == wanted)
     ds = ds.shuffle(seed=cfg.shuffle_seed)
     ds = _cap(ds, n)
+    if len(ds) == 0:
+        raise RuntimeError(
+            f"reasoning_sft: domain filter '{cfg.reasoning_sft_domain}' matched "
+            "0 rows. Check that the domain value is still valid for "
+            f"{cfg.reasoning_sft_hf}/{cfg.reasoning_sft_config}.")
     cols = set(ds.column_names)
 
     def to_messages(ex):
@@ -278,7 +293,12 @@ def load_repair_sft(cfg, n=None):
 
     ds = ds.map(to_repair, with_indices=True, remove_columns=list(cols))
     ds = ds.filter(lambda ex: bool(ex["messages"]))
-    return _cap(ds, n)
+    ds = _cap(ds, n)
+    if len(ds) == 0:
+        raise RuntimeError(
+            "repair_sft: 0 rows survived bug-mutation + filtering. Check the "
+            f"smoke-mode split slice against {cfg.grpo_hf}/{cfg.grpo_config}.")
+    return ds
 
 
 LOADERS = {
