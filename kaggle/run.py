@@ -26,7 +26,7 @@ import sys
 REPO_URL = "https://github.com/Say43/AgentLight.git"
 REPO_DIR = "/kaggle/working/AgentLight"
 BRANCH = "main"
-PHASES = ["reasoning_sft", "general_sft", "grpo"]  # trim to fit a session
+PHASES = ["reasoning_sft", "repair_sft", "general_sft", "grpo"]  # trim to fit a session
 USE_DDP = False  # single-GPU (project decision): Unsloth OSS multi-GPU is
 # unstable (hangs / silent gradient corruption vs. its patched graph). Flip to
 # True only to *experiment* with torchrun DDP AFTER a working single-GPU pilot.

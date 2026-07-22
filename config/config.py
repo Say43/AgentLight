@@ -71,6 +71,11 @@ class DataConfig:
     grpo_hf: str = "google-research-datasets/mbpp"
     grpo_config: str = "full"
 
+    # Repair SFT (Kimi-Dev-style skill-then-repair): same license-clean MBPP
+    # source as GRPO, reused to build buggy-attempt -> test-failure ->
+    # corrected-code trajectories. See data/prepare_data.py:load_repair_sft.
+    repair_sft_max_samples: int = 300    # MBPP "full" train has only 374 rows
+
     # Held-out eval benchmark for the before/after showcase (HumanEval, MIT).
     eval_hf: str = "openai/openai_humaneval"
 
@@ -105,13 +110,19 @@ class TrainConfig:
     output_root: str = field(
         default_factory=lambda: os.environ.get("AGENTLIGHT_OUT", "checkpoints"))
 
-    # Ordered pipeline. reasoning -> sft -> grpo (curriculum: first learn to
-    # think in long CoT, then general instruction/tool behavior, then sharpen
-    # reasoning with RL on verifiable rewards).
+    # Ordered pipeline. reasoning -> repair -> sft -> grpo (curriculum: first
+    # learn to think in long CoT, then practice repairing a failing attempt
+    # from a test trace (Kimi-Dev-style skill-then-repair), then general
+    # instruction/tool behavior, then sharpen reasoning with RL on verifiable
+    # rewards).
     reasoning_sft: PhaseConfig = field(default_factory=lambda: PhaseConfig(
         name="reasoning_sft", max_steps=600,
         per_device_train_batch_size=2, gradient_accumulation_steps=8,
         learning_rate=2e-4))
+    repair_sft: PhaseConfig = field(default_factory=lambda: PhaseConfig(
+        name="repair_sft", max_steps=200,
+        per_device_train_batch_size=2, gradient_accumulation_steps=8,
+        learning_rate=1.5e-4))
     general_sft: PhaseConfig = field(default_factory=lambda: PhaseConfig(
         name="general_sft", max_steps=250,
         per_device_train_batch_size=2, gradient_accumulation_steps=8,
@@ -125,6 +136,17 @@ class TrainConfig:
     grpo_num_generations: int = 4       # rollouts per prompt (T4-friendly)
     grpo_max_prompt_length: int = 640
     grpo_max_completion_length: int = 512
+
+    # GRPO curriculum filter (DeepSWE-style): before training, cheaply probe
+    # a subsample of tasks and drop the ones that are trivially all-pass or
+    # all-fail for the current policy — those give zero reward variance and
+    # therefore zero GRPO gradient, so probing them out saves rollout budget
+    # for tasks that can actually teach the policy something.
+    grpo_curriculum: bool = True
+    grpo_curriculum_sample_size: int = 48   # max tasks probed (cheap subsample)
+    grpo_curriculum_num_generations: int = 2  # generations/task for the probe
+    grpo_curriculum_max_new_tokens: int = 224  # short probe completions
+    grpo_curriculum_timeout: float = 3.0    # per-test sandbox timeout (probe)
 
 
 @dataclass
@@ -146,15 +168,23 @@ def _apply_smoke_overrides(cfg: Config) -> None:
     if os.environ.get("AGENTLIGHT_SMOKE", "").lower() not in {"1", "true", "yes"}:
         return
     cfg.data.reasoning_sft_max_samples = 24
+    cfg.data.repair_sft_max_samples = 24
     cfg.data.general_sft_max_samples = 24
     cfg.data.grpo_max_samples = 16
     cfg.train.reasoning_sft.max_steps = 5
+    cfg.train.repair_sft.max_steps = 5
     cfg.train.general_sft.max_steps = 5
     cfg.train.grpo.max_steps = 3
     cfg.train.reasoning_sft.save_steps = 5
+    cfg.train.repair_sft.save_steps = 5
     cfg.train.general_sft.save_steps = 5
     cfg.train.grpo.save_steps = 3
     cfg.train.grpo_max_completion_length = 128
+    # Keep the curriculum pre-pass near-trivial in smoke mode: a couple of
+    # tasks, a couple of short generations each.
+    cfg.train.grpo_curriculum_sample_size = 4
+    cfg.train.grpo_curriculum_num_generations = 2
+    cfg.train.grpo_curriculum_max_new_tokens = 48
 
 
 def _apply_distributed_overrides(cfg: Config) -> None:
@@ -164,6 +194,7 @@ def _apply_distributed_overrides(cfg: Config) -> None:
         return
     for phase in (
         cfg.train.reasoning_sft,
+        cfg.train.repair_sft,
         cfg.train.general_sft,
         cfg.train.grpo,
     ):

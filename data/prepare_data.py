@@ -15,6 +15,7 @@ No OpenAI/Anthropic/Google-model-distilled data is used for TRAINING.
 
 from __future__ import annotations
 
+import random
 import re
 import os
 
@@ -167,8 +168,122 @@ def load_grpo(cfg, n=None):
     return ds.map(to_prompt, remove_columns=ds.column_names)
 
 
+
+# ---------------------------------------------------------------------------
+# Repair SFT (Kimi-Dev-style skill-then-repair) — same license-clean MBPP
+# source as GRPO, turned into buggy-attempt -> test-failure -> corrected-code
+# trajectories instead of RL rollouts.
+# ---------------------------------------------------------------------------
+# Each entry mutates exactly one common bug pattern into otherwise-correct
+# MBPP gold code, e.g. a wrong comparison or an off-by-one. Fixed-string
+# replacements only (no backreferences needed).
+_BUG_PATTERNS = [
+    (re.compile(r"<="), "<"),
+    (re.compile(r">="), ">"),
+    (re.compile(r"(?<![=!<>])==(?!=)"), "!="),
+    (re.compile(r"\breturn True\b"), "return False"),
+    (re.compile(r"\breturn False\b"), "return True"),
+    (re.compile(r"\bmin\("), "max("),
+    (re.compile(r"\bmax\("), "min("),
+    (re.compile(r"\bsorted\("), "list("),
+    (re.compile(r"\+ 1\b"), "- 1"),
+    (re.compile(r"- 1\b"), "+ 1"),
+]
+
+
+def _mutate_code(code: str, rng: random.Random) -> str | None:
+    """Turn correct MBPP code into a plausible one-bug WRONG attempt.
+
+    Deterministic given `rng`: shuffles the candidate-pattern order so the
+    corpus doesn't all fail the same way, then mutates exactly one randomly
+    chosen occurrence of the first pattern that actually matches. Returns
+    None if no candidate pattern matches (short/simple solutions) — the
+    caller skips that MBPP row rather than emitting a "buggy" attempt that
+    isn't actually buggy.
+    """
+    order = list(range(len(_BUG_PATTERNS)))
+    rng.shuffle(order)
+    for idx in order:
+        pattern, repl = _BUG_PATTERNS[idx]
+        matches = list(pattern.finditer(code))
+        if matches:
+            m = rng.choice(matches)
+            return code[:m.start()] + repl + code[m.end():]
+    return None
+
+
+def _synthesize_failure(public_test: str) -> str:
+    """Build a realistic-looking AssertionError trace for a failed test.
+
+    The mutated code is never actually executed here — data prep stays a
+    pure, fast, non-sandboxed step (only src/train.py's GRPO reward and
+    agent/executor.py touch the sandboxed runner) — so this mirrors the
+    shape of a genuine pytest/assert failure without inventing a specific
+    wrong right-hand-side value the mutation didn't really produce.
+    """
+    return (
+        "Ran the public test:\n"
+        f"    {public_test}\n\n"
+        "Traceback (most recent call last):\n"
+        "  File \"solution.py\", line 1, in <module>\n"
+        f"    {public_test}\n"
+        "AssertionError"
+    )
+
+
+def load_repair_sft(cfg, n=None):
+    ds = load_dataset(
+        cfg.grpo_hf,
+        cfg.grpo_config,
+        split=_split_for_budget("train", n),
+    )
+    # Shuffle with the config seed BEFORE capping, same discipline as the
+    # other loaders, so the budget is not an accidental slice of the corpus.
+    ds = ds.shuffle(seed=cfg.shuffle_seed)
+    cols = set(ds.column_names)
+
+    def to_repair(ex, idx):
+        gold = (ex.get("code") or "").strip()
+        all_tests = ex.get("test_list", []) or []
+        if not gold or not all_tests:
+            return {"messages": []}
+        rng = random.Random(cfg.shuffle_seed + idx)
+        buggy = _mutate_code(gold, rng)
+        if buggy is None:
+            return {"messages": []}
+        public_test = all_tests[0]
+        problem = (ex.get("text") or ex.get("prompt") or "").strip()
+        user_problem = (problem +
+                        "\n\nYour solution must satisfy this public example:\n" +
+                        public_test)
+        failure = _synthesize_failure(public_test)
+        think = (
+            "The previous attempt fails the public test above. Re-reading "
+            "the problem and comparing against the example, the bug is a "
+            "small logic error (a comparison/boundary/helper-function "
+            "mistake). Fixing that and re-checking against the example "
+            "gives the corrected solution below."
+        )
+        msgs = [
+            {"role": "system", "content": CODE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_problem},
+            {"role": "assistant", "content": "```python\n" + buggy + "\n```"},
+            {"role": "user", "content": failure},
+            {"role": "assistant", "content": (
+                "<think>\n" + think + "\n</think>\n\n"
+                "```python\n" + gold + "\n```"
+            )},
+        ]
+        return {"messages": msgs}
+
+    ds = ds.map(to_repair, with_indices=True, remove_columns=list(cols))
+    ds = ds.filter(lambda ex: bool(ex["messages"]))
+    return _cap(ds, n)
+
+
 LOADERS = {
     "reasoning_sft": load_reasoning_sft,
+    "repair_sft": load_repair_sft,
     "general_sft": load_general_sft,
     "grpo": load_grpo,
 }

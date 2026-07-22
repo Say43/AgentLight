@@ -1,8 +1,9 @@
-"""AgentLight training pipeline: reasoning-SFT -> general-SFT -> GRPO.
+"""AgentLight training pipeline:
+reasoning-SFT -> repair-SFT -> general-SFT -> GRPO.
 
 Run one, several, or all phases:
 
-    python src/train.py --phases reasoning_sft general_sft grpo
+    python src/train.py --phases reasoning_sft repair_sft general_sft grpo
 
 The pipeline is resumable: each phase saves its LoRA adapter and a
 `pipeline_state.json`. Re-running skips completed phases and continues from the
@@ -65,7 +66,19 @@ def assert_gpu():
             "hours on GPTlight). Check the Kaggle accelerator setting.")
     name = torch.cuda.get_device_name(0)
     n = torch.cuda.device_count()
-    print(f"[gpu] {n}x {name} | torch {torch.__version__}", flush=True)
+    # GPTlight lesson #4 extended: a Kaggle P100 (Pascal, compute capability
+    # 6.0) can be auto-assigned instead of the expected T4 (7.5). Unsloth
+    # requires CC >= 7.0 (no bf16 / optimized 4-bit kernels below that), so a
+    # P100 would fail deep inside model load after wasting the session. Fail
+    # loudly and clearly at startup instead.
+    major, minor = torch.cuda.get_device_capability(0)
+    if major < 7:
+        raise RuntimeError(
+            f"GPU '{name}' has compute capability {major}.{minor} < 7.0, which "
+            "Unsloth does not support (this is almost certainly a P100). Set the "
+            "Kaggle accelerator to 'GPU T4 x2' and rerun.")
+    print(f"[gpu] {n}x {name} (cc {major}.{minor}) | torch {torch.__version__}",
+          flush=True)
     return name
 
 
@@ -234,6 +247,87 @@ def _completion_text(c):
     return c[0]["content"] if isinstance(c, list) else c
 
 
+# Set by run_grpo() for the duration of trainer.train(), read by
+# correctness_reward(). TRL's reward-func contract does not pass the trainer
+# or step count into reward functions, so this is how the reward function
+# (which sees raw completions + test scores) and the rollout/metrics logging
+# (which needs those same scores) share data without changing the reward
+# function's call signature.
+_ACTIVE_GRPO_METRICS = None
+
+
+class _GRPOMetrics:
+    """Rollout log (SWE-Gym-style reuse) + per-step training-health summary.
+
+    correctness_reward() calls record() with the raw (unscaled, 0..1) test
+    scores it already computed -- no duplicate test execution. The
+    RolloutMetricsCallback nested in run_grpo() calls flush() once per step
+    with timing/VRAM it alone can observe.
+    """
+
+    def __init__(self, rollout_path, metrics_path, num_generations,
+                 max_completion_length):
+        self.rollout_path = rollout_path
+        self.metrics_path = metrics_path
+        self.num_generations = max(1, num_generations)
+        self.max_completion_length = max(1, max_completion_length)
+        self.reset()
+
+    def reset(self):
+        self.scores = []
+        self.lengths = []
+
+    def record(self, completions, scores):
+        if not _is_main_process():
+            return
+        lines = []
+        for comp, s in zip(completions, scores):
+            text = _completion_text(comp)
+            self.scores.append(s)
+            self.lengths.append(len(text))
+            lines.append(json.dumps({"completion": text, "test_score": s}))
+        if self.rollout_path and lines:
+            with open(self.rollout_path, "a", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+
+    def flush(self, step, elapsed_sec, peak_vram_gb):
+        if not _is_main_process():
+            self.reset()
+            return
+        if not self.scores:
+            return
+        import statistics
+        n = self.num_generations
+        groups = [self.scores[i:i + n] for i in range(0, len(self.scores), n)]
+        zero_variance = sum(
+            1 for g in groups if len(g) > 1 and max(g) - min(g) < 1e-6)
+        # Chars, not tokens (no tokenizer available here) -- a rough /4
+        # chars-per-token estimate is used only to flag likely truncation,
+        # not to report an exact token count.
+        approx_tokens = [c / 4.0 for c in self.lengths]
+        truncated = sum(
+            1 for t in approx_tokens
+            if t >= self.max_completion_length * 0.98)
+        record = {
+            "step": step,
+            "reward_mean": statistics.fmean(self.scores),
+            "reward_std": (statistics.pstdev(self.scores)
+                           if len(self.scores) > 1 else 0.0),
+            "zero_variance_groups": zero_variance,
+            "num_groups": len(groups),
+            "completion_chars_mean": statistics.fmean(self.lengths),
+            "completion_chars_max": max(self.lengths),
+            "truncation_rate_approx": truncated / len(self.lengths),
+            "sec_per_step": round(elapsed_sec, 3),
+            "peak_vram_gb": round(peak_vram_gb, 3),
+        }
+        if self.metrics_path:
+            with open(self.metrics_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+        print(f"[grpo-metrics] {json.dumps(record)}", flush=True)
+        self.reset()
+
+
 def correctness_reward(prompts, completions, tests=None, setup=None, **kw):
     """Fraction of MBPP unit tests the generated code passes, scaled to [0,3]."""
     from agent.executor import extract_code, score_solution
@@ -248,11 +342,16 @@ def correctness_reward(prompts, completions, tests=None, setup=None, **kw):
     # parallel so slow/timeout candidates do not serialize an entire GRPO step.
     def score(job):
         code, test_list, test_setup = job
-        return 3.0 * score_solution(code, test_list, test_setup, timeout=3.0)
+        return score_solution(code, test_list, test_setup, timeout=3.0)
 
     workers = max(1, min(4, len(jobs)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(score, jobs))
+        fractions = list(pool.map(score, jobs))
+
+    if _ACTIVE_GRPO_METRICS is not None:
+        _ACTIVE_GRPO_METRICS.record(completions, fractions)
+
+    return [3.0 * f for f in fractions]
 
 
 def format_reward(prompts, completions, **kw):
@@ -270,12 +369,126 @@ def format_reward(prompts, completions, **kw):
     return out
 
 
+def _curriculum_filter(cfg, model, tokenizer, dataset):
+    """DeepSWE-style curriculum filter: drop zero-variance MBPP tasks.
+
+    Cheap pre-pass over a small subsample of tasks: sample a few short
+    completions per task and drop the ones that are trivially all-pass or
+    all-fail for the current policy -- those give zero reward variance and
+    therefore zero GRPO gradient, so this is rollout budget better spent on
+    tasks that can actually teach the policy something. Tasks beyond the
+    probed subsample are left untouched (this is a budget-cheap heuristic,
+    not an exhaustive re-grading of the whole dataset).
+    """
+    if not cfg.train.grpo_curriculum:
+        return dataset
+    sample_n = min(len(dataset), cfg.train.grpo_curriculum_sample_size)
+    if sample_n == 0:
+        return dataset
+
+    from agent.executor import extract_code, score_solution
+    from unsloth import FastLanguageModel
+    from datasets import concatenate_datasets
+    import torch
+
+    n_gen = max(1, cfg.train.grpo_curriculum_num_generations)
+    probe = dataset.select(range(sample_n))
+    keep_idx = []
+
+    FastLanguageModel.for_inference(model)
+    try:
+        for i in range(sample_n):
+            ex = probe[i]
+            prompt_text = tokenizer.apply_chat_template(
+                ex["prompt"], tokenize=False, add_generation_prompt=True)
+            try:
+                inputs = tokenizer(prompt_text, return_tensors="pt").to(model.device)
+                with torch.no_grad():
+                    gen = model.generate(
+                        **inputs,
+                        max_new_tokens=cfg.train.grpo_curriculum_max_new_tokens,
+                        do_sample=True, temperature=1.0,
+                        num_return_sequences=n_gen,
+                        pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                    )
+                prompt_len = inputs["input_ids"].shape[1]
+                scores = []
+                for row in gen:
+                    text = tokenizer.decode(
+                        row[prompt_len:], skip_special_tokens=True)
+                    code = extract_code(text)
+                    scores.append(score_solution(
+                        code, ex["tests"], ex.get("setup", ""),
+                        timeout=cfg.train.grpo_curriculum_timeout))
+            except Exception as e:  # pragma: no cover - defensive, keep on error
+                print(f"[grpo-curriculum] probe {i} failed ({e}); keeping task",
+                      flush=True)
+                keep_idx.append(i)
+                continue
+            all_pass = all(s >= 1.0 - 1e-6 for s in scores)
+            all_fail = all(s <= 1e-6 for s in scores)
+            if not (all_pass or all_fail):
+                keep_idx.append(i)
+    finally:
+        FastLanguageModel.for_training(model)
+
+    dropped = sample_n - len(keep_idx)
+    kept_probe = probe.select(keep_idx)
+    rest = (dataset.select(range(sample_n, len(dataset)))
+            if len(dataset) > sample_n else None)
+    filtered = concatenate_datasets([kept_probe, rest]) if rest is not None \
+        else kept_probe
+    print(f"[grpo-curriculum] probed {sample_n} tasks, dropped {dropped} "
+          f"zero-variance, kept {len(kept_probe)}/{sample_n} probed "
+          f"(+{len(rest) if rest is not None else 0} unprobed) -> "
+          f"{len(filtered)} tasks total", flush=True)
+    return filtered
+
+
 def run_grpo(cfg, model, tokenizer, phase, dataset):
     from trl import GRPOConfig, GRPOTrainer
+    from transformers import TrainerCallback
+    import torch
+
+    class RolloutMetricsCallback(TrainerCallback):
+        """Lightweight HF TrainerCallback: times each step and reads peak
+        VRAM, then asks the shared _GRPOMetrics (fed by correctness_reward)
+        to flush one JSON metrics line per step. report_to stays "none" --
+        this is a self-contained substitute, not a W&B/Comet integration.
+        """
+
+        def __init__(self, metrics):
+            self.metrics = metrics
+            self._t0 = None
+
+        def on_step_begin(self, args, state, control, **kwargs):
+            import time
+            self._t0 = time.monotonic()
+
+        def on_step_end(self, args, state, control, **kwargs):
+            import time
+            elapsed = (time.monotonic() - self._t0) if self._t0 else 0.0
+            peak_vram_gb = 0.0
+            if torch.cuda.is_available():
+                peak_vram_gb = torch.cuda.max_memory_allocated() / (1024 ** 3)
+                torch.cuda.reset_peak_memory_stats()
+            self.metrics.flush(state.global_step, elapsed, peak_vram_gb)
 
     out = phase_dir(cfg, phase.name)
-    import torch
     bf16 = bool(torch.cuda.is_bf16_supported())
+
+    if cfg.train.grpo_curriculum:
+        dataset = _curriculum_filter(cfg, model, tokenizer, dataset)
+
+    os.makedirs(cfg.train.output_root, exist_ok=True)
+    os.makedirs(out, exist_ok=True)
+    global _ACTIVE_GRPO_METRICS
+    _ACTIVE_GRPO_METRICS = _GRPOMetrics(
+        rollout_path=os.path.join(cfg.train.output_root, "rollouts.jsonl"),
+        metrics_path=os.path.join(out, "grpo_metrics.jsonl"),
+        num_generations=cfg.train.grpo_num_generations,
+        max_completion_length=cfg.train.grpo_max_completion_length,
+    )
     grpo_config_kwargs = {
         "output_dir": out,
         "per_device_train_batch_size": phase.per_device_train_batch_size,
@@ -310,11 +523,15 @@ def run_grpo(cfg, model, tokenizer, phase, dataset):
         "reward_funcs": [correctness_reward, format_reward],
         "train_dataset": dataset,
         "args": grpo_args,
+        "callbacks": [RolloutMetricsCallback(_ACTIVE_GRPO_METRICS)],
     }
     trainer = GRPOTrainer(**_supported_kwargs(GRPOTrainer, trainer_kwargs))
     resume = os.path.isdir(out) and any(
         d.startswith("checkpoint-") for d in os.listdir(out))
-    trainer.train(resume_from_checkpoint=resume)
+    try:
+        trainer.train(resume_from_checkpoint=resume)
+    finally:
+        _ACTIVE_GRPO_METRICS = None
     if _is_main_process():
         model.save_pretrained(out)
         tokenizer.save_pretrained(out)
@@ -327,11 +544,13 @@ def run_grpo(cfg, model, tokenizer, phase, dataset):
 # ---------------------------------------------------------------------------
 PHASE_CFG = {
     "reasoning_sft": lambda c: c.train.reasoning_sft,
+    "repair_sft":    lambda c: c.train.repair_sft,
     "general_sft":   lambda c: c.train.general_sft,
     "grpo":          lambda c: c.train.grpo,
 }
 PHASE_MAX = {
     "reasoning_sft": lambda c: c.data.reasoning_sft_max_samples,
+    "repair_sft":    lambda c: c.data.repair_sft_max_samples,
     "general_sft":   lambda c: c.data.general_sft_max_samples,
     "grpo":          lambda c: c.data.grpo_max_samples,
 }
@@ -340,7 +559,7 @@ PHASE_MAX = {
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--phases", nargs="+",
-                    default=["reasoning_sft", "general_sft", "grpo"])
+                    default=["reasoning_sft", "repair_sft", "general_sft", "grpo"])
     args = ap.parse_args()
 
     cfg = CONFIG
@@ -358,7 +577,7 @@ def main():
 
     # Resume from the most recently completed phase's adapter, if any.
     resume_from = None
-    for ph in ["grpo", "general_sft", "reasoning_sft"]:
+    for ph in ["grpo", "general_sft", "repair_sft", "reasoning_sft"]:
         d = phase_dir(cfg, ph)
         if ph in completed and os.path.isdir(d):
             resume_from = d
