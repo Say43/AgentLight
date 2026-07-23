@@ -67,8 +67,9 @@ def generate(model, tok, messages, max_new_tokens=1024, temperature=0.4):
     gen_kwargs = dict(max_new_tokens=max_new_tokens, do_sample=temperature > 0,
                       pad_token_id=tok.eos_token_id,
                       # Anti-degeneration (same reason as chat_ui): stop the 3B
-                      # from locking into a phrase loop.
-                      repetition_penalty=1.3, no_repeat_ngram_size=4)
+                      # from locking into a phrase loop, gently enough not to
+                      # spiral structured code into whitespace/garbage.
+                      repetition_penalty=1.2, no_repeat_ngram_size=8)
     if temperature > 0:
         gen_kwargs["temperature"] = temperature
     with torch.no_grad():

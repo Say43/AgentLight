@@ -199,19 +199,19 @@ def stream_reply(model, tok, messages, max_new_tokens=1536, temperature=0.4):
         max_new_tokens=max_new_tokens,
         do_sample=temperature > 0,
         pad_token_id=tok.eos_token_id,
-        # Anti-degeneration: a 3B checkpoint (esp. after GRPO) can lock into a
-        # phrase loop ("Think about what kind of script you want to write…"
-        # forever). repetition_penalty dampens already-used tokens and
-        # no_repeat_ngram_size hard-forbids repeating a 4-gram, which together
-        # break the loop. (GPTlight's chat used repetition_penalty=1.3 for the
-        # same reason.) ngram=4 rather than 3 so legitimate short code repeats
-        # (e.g. "    return ") aren't blocked.
-        repetition_penalty=1.3,
-        no_repeat_ngram_size=4,
+        # Anti-degeneration. A 3B checkpoint can either lock into a phrase
+        # loop OR (with too-aggressive settings) spiral into walls of
+        # whitespace and random tokens. repetition_penalty=1.2 is gentle
+        # enough not to push common code tokens (newline, spaces) toward rare
+        # garbage; no_repeat_ngram_size=6 still forbids long exact-phrase
+        # loops but leaves short, legitimate code/indentation repeats alone
+        # (4 was too tight and turned indentation into a "Lucas Lucas…" spiral).
+        repetition_penalty=1.2,
+        no_repeat_ngram_size=6,
     )
     if temperature > 0:
         gen_kwargs["temperature"] = temperature
-        gen_kwargs["top_p"] = 0.9
+        gen_kwargs["top_p"] = 0.92
 
     def _run():
         with torch.no_grad():
