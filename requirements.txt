@@ -11,6 +11,11 @@ peft>=0.17.1
 accelerate>=1.10.1
 datasets>=3.6.0
 trl==1.8.0
+# sentencepiece: the Llama tokenizer needs it to build the fast tokenizer.
+sentencepiece>=0.2.0
+# bitsandbytes: the trained adapters reference the bnb-4bit base model, so
+# loading them for chat/eval pulls the base in 4-bit (also keeps VRAM ~3GB).
+bitsandbytes>=0.46.1
 
 # --- Kaggle training stack (GPU/CUDA-only, Linux-only for vLLM) -----------------
 # NOT installed by a plain `pip install -r requirements.txt` (heavy, and

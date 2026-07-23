@@ -1,0 +1,8 @@
+{
+  "completed": [
+    "general_sft",
+    "reasoning_sft",
+    "repair_sft"
+  ],
+  "model_name": "unsloth/Llama-3.2-3B-Instruct"
+}

@@ -31,31 +31,46 @@ def load_model(adapter_dir: str):
         import json
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        from peft import PeftModel
 
-        tok = AutoTokenizer.from_pretrained(adapter_dir)
-        # adapter_dir holds a LoRA adapter, not a full model -- read its
-        # config to find the base model it was trained against, load that
-        # base, then attach the adapter on top of it.
         cfg_path = os.path.join(adapter_dir, "adapter_config.json")
-        with open(cfg_path, encoding="utf-8") as f:
-            adapter_cfg = json.load(f)
-        base_name = adapter_cfg["base_model_name_or_path"]
-        base = AutoModelForCausalLM.from_pretrained(
-            base_name, torch_dtype=torch.float16, device_map="auto")
-        model = PeftModel.from_pretrained(base, adapter_dir)
+        if os.path.exists(cfg_path):
+            # adapter_dir is a LoRA adapter (only adapter_config.json +
+            # adapter_model.safetensors -- no tokenizer/base weights). The
+            # tokenizer AND base weights come from the base model it references;
+            # loading the tokenizer from adapter_dir fails (no tokenizer files).
+            from peft import PeftModel
+            with open(cfg_path, encoding="utf-8") as f:
+                base_name = json.load(f)["base_model_name_or_path"]
+            tok = AutoTokenizer.from_pretrained(base_name)
+            base = AutoModelForCausalLM.from_pretrained(
+                base_name, torch_dtype=torch.float16, device_map="auto")
+            model = PeftModel.from_pretrained(base, adapter_dir)
+        else:
+            # adapter_dir is actually a full model / HF repo name (e.g. the
+            # base model itself, for a baseline chat).
+            tok = AutoTokenizer.from_pretrained(adapter_dir)
+            model = AutoModelForCausalLM.from_pretrained(
+                adapter_dir, torch_dtype=torch.float16, device_map="auto")
         return model, tok
 
 
 def generate(model, tok, messages, max_new_tokens=1024, temperature=0.4):
     import torch
-    inputs = tok.apply_chat_template(
-        messages, add_generation_prompt=True, return_tensors="pt").to(model.device)
+    # return_dict=True: newer transformers returns a BatchEncoding (input_ids +
+    # attention_mask), and generate() must get those as kwargs, not a bare
+    # tensor as the first positional arg (that path calls .shape on the dict).
+    enc = tok.apply_chat_template(
+        messages, add_generation_prompt=True, return_tensors="pt",
+        return_dict=True)
+    enc = {k: v.to(model.device) for k, v in enc.items()}
+    prompt_len = enc["input_ids"].shape[1]
+    gen_kwargs = dict(max_new_tokens=max_new_tokens, do_sample=temperature > 0,
+                      pad_token_id=tok.eos_token_id)
+    if temperature > 0:
+        gen_kwargs["temperature"] = temperature
     with torch.no_grad():
-        out = model.generate(inputs, max_new_tokens=max_new_tokens,
-                             temperature=temperature, do_sample=temperature > 0,
-                             pad_token_id=tok.eos_token_id)
-    return tok.decode(out[0][inputs.shape[1]:], skip_special_tokens=True)
+        out = model.generate(**enc, **gen_kwargs)
+    return tok.decode(out[0][prompt_len:], skip_special_tokens=True)
 
 
 def solve(model, tok, problem: str, tests=None, setup: str = "",

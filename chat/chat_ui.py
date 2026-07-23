@@ -187,12 +187,14 @@ def stream_reply(model, tok, messages, max_new_tokens=1536, temperature=0.4):
     import torch
     from transformers import TextIteratorStreamer
 
-    inputs = tok.apply_chat_template(
-        messages, add_generation_prompt=True, return_tensors="pt").to(model.device)
+    enc = tok.apply_chat_template(
+        messages, add_generation_prompt=True, return_tensors="pt",
+        return_dict=True)
+    enc = {k: v.to(model.device) for k, v in enc.items()}
     streamer = TextIteratorStreamer(
         tok, skip_prompt=True, skip_special_tokens=True)
     gen_kwargs = dict(
-        input_ids=inputs,
+        **enc,
         streamer=streamer,
         max_new_tokens=max_new_tokens,
         do_sample=temperature > 0,
