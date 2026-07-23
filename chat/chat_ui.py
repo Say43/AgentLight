@@ -199,9 +199,19 @@ def stream_reply(model, tok, messages, max_new_tokens=1536, temperature=0.4):
         max_new_tokens=max_new_tokens,
         do_sample=temperature > 0,
         pad_token_id=tok.eos_token_id,
+        # Anti-degeneration: a 3B checkpoint (esp. after GRPO) can lock into a
+        # phrase loop ("Think about what kind of script you want to write…"
+        # forever). repetition_penalty dampens already-used tokens and
+        # no_repeat_ngram_size hard-forbids repeating a 4-gram, which together
+        # break the loop. (GPTlight's chat used repetition_penalty=1.3 for the
+        # same reason.) ngram=4 rather than 3 so legitimate short code repeats
+        # (e.g. "    return ") aren't blocked.
+        repetition_penalty=1.3,
+        no_repeat_ngram_size=4,
     )
     if temperature > 0:
         gen_kwargs["temperature"] = temperature
+        gen_kwargs["top_p"] = 0.9
 
     def _run():
         with torch.no_grad():
@@ -239,7 +249,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--adapter", default="checkpoints/grpo",
                     help="Trained adapter dir, or a base model name to test.")
-    ap.add_argument("--temperature", type=float, default=0.4)
+    ap.add_argument("--temperature", type=float, default=0.6)
     ap.add_argument("--max-new-tokens", type=int, default=1536)
     ap.add_argument("--max-turns", type=int, default=8,
                     help="How many past turns to keep in context.")
