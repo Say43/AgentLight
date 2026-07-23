@@ -1,11 +1,9 @@
-# Model weights / adapters — never committed (large, and license-encumbered
-# base weights must not be redistributed). See checkpoints/README.md.
-checkpoints/**/*.pt
-checkpoints/**/*.safetensors
-checkpoints/**/*.bin
-checkpoints/**/adapter_model*
-checkpoints/**/optimizer*
-checkpoints/**/*.gguf
+# Model weights / adapters / configs — never committed (large, and
+# license-encumbered base weights must not be redistributed). Ignore
+# everything under checkpoints/ except the README; adapter_config.json and
+# pipeline_state.json are orphans without their gitignored weights.
+checkpoints/*
+!checkpoints/README.md
 
 # Data — downloaded at runtime, not vendored.
 data/cache/
