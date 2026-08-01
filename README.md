@@ -16,10 +16,20 @@ It's a standalone sibling to the earlier `GPTlight` project (which trained a
 (see [docs/PLAN.md](docs/PLAN.md)) but shares no code — it's self-contained.
 
 > **Why a small model can still be a real showcase:** the base 3B model already
-> far outperforms a from-scratch model on every benchmark. Our contribution is
-> the *pipeline* — reasoning-SFT → SFT → GRPO — and a measurable pass@1 lift on
-> HumanEval from acting on verifiable rewards. It is a focused code agent, not a
-> general far-reaching assistant; that honesty is the point.
+> far outperforms a from-scratch model on every benchmark. The contribution here
+> is the *pipeline* — reasoning-SFT → repair-SFT → general-SFT → GRPO — and the
+> fact that its reward signal is objective: unit tests either pass or they do
+> not. It is a focused code agent, not a general far-reaching assistant; that
+> honesty is the point.
+
+> **Status: training complete through general-SFT; GRPO not finished, and no
+> evaluation published yet.** The before/after pass@1 comparison this pipeline
+> is built to produce has not been run to completion, so no result is claimed
+> here. `src/eval_code.py` is the harness for it, and
+> [MODEL_CARD.md](MODEL_CARD.md) has the table waiting to be filled. Note that
+> `extract_code` in [agent/executor.py](agent/executor.py) currently takes the
+> *last* Python block in a reply, which mis-scores answers that end with a
+> usage example — fix that before trusting any numbers it produces.
 
 ## Pipeline
 
