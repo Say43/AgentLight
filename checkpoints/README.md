@@ -37,6 +37,25 @@ A full run doesn't fit one ~12h session. To continue next session:
 
 ## Shipping the adapter
 
-Only the `grpo/` adapter is the shippable artifact. If you publish it, include:
-the Llama Community License, a "Built with Llama" notice, and attribution for
-MBPP (CC-BY-4.0). Never upload the base weights.
+Only the `grpo/` adapter is the shippable artifact. Publishing it is a
+*distribution* of a Llama derivative, which triggers obligations that do not
+apply while the weights stay local. Before uploading anywhere — Hugging Face,
+Kaggle, or a release asset — do all of the following:
+
+1. **Name it `Llama-AgentLight`.** The Llama 3.2 Community License requires a
+   distributed derivative's name to begin with "Llama". This is not optional
+   and not cosmetic.
+2. **Publish [`../MODEL_CARD.md`](../MODEL_CARD.md) as the model card.** It
+   already carries "Built with Llama", the Meta attribution string, and the
+   MBPP CC BY 4.0 attribution. Fill in the evaluation numbers first.
+3. **Include [`../NOTICE`](../NOTICE) and
+   [`../licenses/LLAMA_3.2_COMMUNITY_LICENSE.txt`](../licenses/) alongside the
+   weights.** The licence requires a copy to travel with the derivative.
+4. **Never upload Meta's base weights** — only your adapter.
+
+The reasoning behind each point is in
+[`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+
+Note that a *private* Kaggle dataset used to resume training is not a
+distribution. These obligations attach when you make the adapter available to
+others.

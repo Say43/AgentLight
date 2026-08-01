@@ -1,0 +1,69 @@
+AgentLight
+Copyright (c) 2026 AgentLight contributors
+
+This product includes and is built upon third-party materials. The original
+code in this repository is licensed under the MIT License (see LICENSE). The
+notices below apply to the third-party materials and are reproduced as those
+materials' licences require. Full details: THIRD_PARTY_NOTICES.md
+
+
+================================================================================
+Meta Llama 3.2
+================================================================================
+
+Built with Llama
+
+Llama 3.2 is licensed under the Llama 3.2 Community License, Copyright (c)
+Meta Platforms, Inc. All Rights Reserved.
+
+AgentLight fine-tunes Meta's Llama 3.2 3B Instruct model using LoRA. Any model
+produced by this project is a derivative of Llama 3.2 and is therefore subject
+to the Llama 3.2 Community License Agreement, a copy of which is provided in
+licenses/LLAMA_3.2_COMMUNITY_LICENSE.txt, and to the Llama 3.2 Acceptable Use
+Policy in licenses/LLAMA_3.2_ACCEPTABLE_USE_POLICY.txt.
+
+Per section 1.b.i of that Agreement, any distributed model produced by this
+project must be named with "Llama" at the beginning of its name. The name
+reserved for that purpose is:
+
+    Llama-AgentLight
+
+Meta's base model weights are NOT redistributed by this repository; they are
+downloaded from their official source at runtime.
+
+
+================================================================================
+MBPP (Mostly Basic Python Problems)
+================================================================================
+
+Copyright (c) Google Research. Licensed under the Creative Commons Attribution
+4.0 International License (CC BY 4.0).
+
+From "Program Synthesis with Large Language Models", Austin et al., 2021
+(arXiv:2108.07732). MBPP is used as the reinforcement-learning task source and
+its unit tests as the verifiable reward signal. CC BY 4.0 requires this
+attribution on any distributed derivative, including trained model weights.
+
+
+================================================================================
+HumanEval
+================================================================================
+
+Copyright (c) OpenAI. Licensed under the MIT License.
+
+From "Evaluating Large Language Models Trained on Code", Chen et al., 2021
+(arXiv:2107.03374). Used for evaluation only; not used for training.
+
+
+================================================================================
+OpenThoughts-114k
+================================================================================
+
+Copyright (c) the OpenThoughts authors. Licensed under the Apache License 2.0.
+
+
+================================================================================
+SmolTalk
+================================================================================
+
+Copyright (c) Hugging Face. Licensed under the Apache License 2.0.

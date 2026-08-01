@@ -1,5 +1,7 @@
 # AgentLight
 
+**Built with Llama**
+
 A **coding agent** built by fine-tuning a vanilla open-weight Llama into a
 reasoning + tool-using model — on a hobbyist Kaggle GPU budget.
 
@@ -48,6 +50,9 @@ kaggle/run.py           Kaggle entrypoint (install + sync repo + train)
 kaggle/kernel-metadata.json
 docs/PLAN.md            The 16h Kaggle plan, phase budget, and GPTlight lessons
 THIRD_PARTY_NOTICES.md  Model + dataset licenses and compliance obligations
+NOTICE                  Required attribution notices (Llama, MBPP)
+MODEL_CARD.md           Ready-to-publish card for the trained adapter
+licenses/               Verbatim Llama 3.2 license and acceptable use policy
 ```
 
 ## Running it
@@ -74,8 +79,35 @@ pip install -r requirements.txt
 python chat/local_chat.py --adapter checkpoints/grpo
 ```
 
-## License
+## Licence and attribution
 
-Code is MIT ([LICENSE](LICENSE)). The base model (Llama Community License) and
-datasets carry their own terms and obligations — all documented in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Built with Llama.
+**Built with Llama.** The code in this repository is MIT-licensed
+([LICENSE](LICENSE)). Everything the project builds on keeps its own licence,
+and two of those impose obligations that continue to apply to anything trained
+here:
+
+- **Llama 3.2 Community License** — the base model is Meta's Llama 3.2 3B
+  Instruct, so any model trained by this pipeline is a derivative of it. A
+  distributed model must be named beginning with "Llama" (the name reserved
+  here is **`Llama-AgentLight`**), must display "Built with Llama", and must
+  ship with a copy of the licence: [licenses/](licenses/).
+- **MBPP (CC BY 4.0)** — supplies the GRPO reward signal, so trained weights
+  are a derivative of it and must carry its attribution.
+
+Meta's base weights and the raw datasets are **never redistributed here**;
+they are downloaded from their official sources at runtime.
+
+Required attribution notices: [NOTICE](NOTICE). Full analysis of every
+third-party component, the obligations it imposes, and how they are met:
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). If you publish an adapter,
+use [MODEL_CARD.md](MODEL_CARD.md) — it already carries the required notices.
+
+> Llama 3.2 is licensed under the Llama 3.2 Community License, Copyright ©
+> Meta Platforms, Inc. All Rights Reserved.
+
+## Safety note
+
+The GRPO reward and the ReAct agent both **execute model-generated Python**
+([agent/executor.py](agent/executor.py)). Run training, evaluation, and the
+agent in a disposable environment. Never execute model-written code
+unreviewed on a machine whose contents you care about.

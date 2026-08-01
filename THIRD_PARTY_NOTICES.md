@@ -1,67 +1,123 @@
-# Third-Party Licenses & Compliance
+# Third-party licences and compliance
 
-AgentLight's own code is MIT-licensed (see `LICENSE`). The **base model** and
-**training datasets** are third-party works under their own licenses. This
-file documents them and the obligations they impose, so the project stays
-legal, freely usable, and license-compliant.
+AgentLight's own code is MIT-licensed (see [LICENSE](LICENSE)). The base
+model, the training datasets, and the runtime dependencies are third-party
+works under their own licences. This file records each one, the obligations it
+imposes, and how the project meets them.
 
-> **Re-verify before use.** Licenses on Hugging Face can change. Open each
-> dataset/model page and confirm the license *at the time you run training*.
-> The notes below reflect the state at project setup.
+The formal attribution notices required by those licences are in
+[NOTICE](NOTICE). Verbatim copies of the Llama licence and acceptable use
+policy are in [licenses/](licenses/).
 
----
-
-## Base model — Llama 3.2 (default) / Llama 3.1 (8B option)
-
-- **License:** Llama 3.2 Community License Agreement (and Llama 3.1 for the
-  8B option). Free to use, including commercially, **subject to its terms.**
-- **Obligations we must meet (and do):**
-  1. **Attribution / naming.** Any distributed derivative must be named
-     beginning with **"Llama"** and must display **"Built with Llama"**.
-     → AgentLight is a *fine-tuned adapter on top of Llama*; distributed
-       artifacts are labeled "Llama-AgentLight" and carry "Built with Llama".
-  2. **Include the license.** Ship a copy of the Llama Community License with
-     any distributed model. → `licenses/LLAMA_LICENSE.txt` (add before you
-     distribute weights).
-  3. **Acceptable Use Policy** must be followed.
-  4. **>700M MAU clause:** if your product exceeds 700M monthly active users,
-     you must request a separate license from Meta. (Not a concern here.)
-- **Weights are NOT redistributed in this repo** — the notebook downloads them
-  from the official Unsloth/Meta repositories at runtime. We only ever
-  distribute the LoRA adapter (small, our own training), never Meta's weights.
-
-> If you want a base model with a *simpler* license (Apache-2.0, no naming or
-> MAU clauses), Qwen2.5-7B or an OLMo model are drop-in alternatives — set
-> `MODEL.name` in `config/config.py`. We use Llama per project decision.
+> **Re-verify before you distribute anything.** Licences on the Hugging Face
+> Hub can change. The statements below were checked against each source page,
+> and each is linked so you can confirm the current state yourself.
 
 ---
 
-## Datasets
+## Base model — Llama 3.2 3B Instruct
 
-| Dataset | Used for | Stated license | Notes |
+`config/config.py` sets `MODEL.name` to `unsloth/Llama-3.2-3B-Instruct`;
+training loads the 4-bit variant `unsloth/llama-3.2-3b-instruct-unsloth-bnb-4bit`.
+Both are repackagings of Meta's Llama 3.2 3B Instruct and remain governed by
+Meta's licence — repackaging does not change it.
+
+- **Licence:** [Llama 3.2 Community License Agreement](licenses/LLAMA_3.2_COMMUNITY_LICENSE.txt)
+  (local verbatim copy). Commercial use is permitted, subject to the terms.
+- **Acceptable Use Policy:** [local copy](licenses/LLAMA_3.2_ACCEPTABLE_USE_POLICY.txt).
+  Compliance is mandatory.
+
+### Obligations and how this project meets them
+
+| Obligation (Agreement §) | Requirement | Status |
+|---|---|---|
+| § 1.b.i (A) | Provide a copy of the Agreement with any distributed Llama Materials or derivative | [licenses/LLAMA_3.2_COMMUNITY_LICENSE.txt](licenses/LLAMA_3.2_COMMUNITY_LICENSE.txt) ships in this repository |
+| § 1.b.i (B) | Prominently display **"Built with Llama"** on a related website, user interface, blogpost, about page, or product documentation | Displayed at the top of [README.md](README.md), in [NOTICE](NOTICE), and in [MODEL_CARD.md](MODEL_CARD.md) |
+| § 1.b.i | A distributed AI model trained on Llama must have a name **beginning with "Llama"** | Any released model is named **`Llama-AgentLight`**. "AgentLight" alone names the *pipeline* (code), not a distributed model |
+| § 1.b.iii | Retain the attribution notice in a `Notice` text file | [NOTICE](NOTICE) contains the required string verbatim |
+| § 2 | Products exceeding 700M monthly active users need a separate licence from Meta | Not applicable to this project |
+| § 5 | Acceptable Use Policy must be followed | [licenses/LLAMA_3.2_ACCEPTABLE_USE_POLICY.txt](licenses/LLAMA_3.2_ACCEPTABLE_USE_POLICY.txt) |
+
+The Llama 3.2 Community License Agreement as published contains no European
+Union restriction applicable to the text-only models used here.
+
+**Meta's weights are never redistributed by this repository.** They are
+downloaded from their official source at runtime. The only model artefact this
+project can distribute is the LoRA adapter it trains — a derivative work,
+which carries the obligations above.
+
+---
+
+## Training and evaluation datasets
+
+None of these datasets are redistributed here. `data/prepare_data.py`
+downloads them from the Hugging Face Hub at runtime.
+
+| Dataset | Phase | Licence | Obligation |
 |---|---|---|---|
-| `open-thoughts/OpenThoughts-114k` | Reasoning SFT | Apache-2.0 | R1-distilled long-CoT (code + math). DeepSeek-R1 is MIT and **explicitly permits distillation**, so training on its outputs is allowed. |
-| `HuggingFaceTB/smoltalk` | General SFT | Apache-2.0 | Broad instruction/chat — keeps the model a usable assistant. |
-| `google-research-datasets/mbpp` | GRPO (verifiable reward) | CC-BY-4.0 | Python tasks with executable `test_list`. **Attribution required** on any distributed derivative. Reward = fraction of unit tests passed. |
-| `openai/openai_humaneval` | Evaluation only | MIT | Human-written code benchmark (NOT model outputs). Used to measure pass@1 before/after — not for training. |
+| [`open-thoughts/OpenThoughts-114k`](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k) | Reasoning SFT | Apache-2.0 | Attribution, notice of changes |
+| [`HuggingFaceTB/smoltalk`](https://huggingface.co/datasets/HuggingFaceTB/smoltalk) | General SFT | Apache-2.0 | Attribution |
+| [`google-research-datasets/mbpp`](https://huggingface.co/datasets/google-research-datasets/mbpp) | GRPO + repair SFT | **CC BY 4.0** | **Attribution required on any distributed derivative, including trained weights** |
+| [`openai/openai_humaneval`](https://huggingface.co/datasets/openai/openai_humaneval) | Evaluation only | MIT | Retain copyright notice |
 
-### The one rule we deliberately follow
+MBPP is the one that imposes a continuing obligation: because it supplies the
+GRPO reward signal, any released adapter is a derivative of a CC BY 4.0 work
+and must carry the attribution in [NOTICE](NOTICE).
 
-**No data distilled from OpenAI/Anthropic/Google models is used for training.**
-Those providers' terms of service prohibit using their outputs to train
-competing models. Our reasoning traces come from **DeepSeek-R1 (MIT, distill
-explicitly allowed)** or human/openly-licensed sources only. This is the
-single most common license trap in reasoning-model fine-tuning, and we avoid
-it by construction.
+### Provenance of the reasoning traces
+
+OpenThoughts-114k contains reasoning traces generated by **DeepSeek-R1**,
+which is MIT-licensed and expressly permits distillation of its outputs. Its
+problem statements are curated from other datasets — for the code domain
+principally `BAAI/TACO`, `codeparrot/apps`, `deepmind/code_contests`, and
+`MatrixStudio/Codeforces-Python-Submissions`. The OpenThoughts authors
+redistribute the assembled dataset under Apache-2.0, and that grant is what
+this project relies on. Anyone repackaging the underlying problems directly
+should check those upstream sources on their own terms.
+
+### The rule this project follows deliberately
+
+**No data distilled from OpenAI, Anthropic, or Google models is used for
+training.** Those providers' terms prohibit using their model outputs to train
+competing models. Every reasoning trace here originates from DeepSeek-R1 (MIT,
+distillation expressly allowed) or from human-written, openly licensed
+sources. This is the most common licence trap in reasoning-model fine-tuning,
+and the pipeline avoids it by construction.
+
+HumanEval is an OpenAI *dataset*, not OpenAI *model output*: it is
+human-written, MIT-licensed, and used here only to measure pass@1. It is never
+trained on.
+
+---
+
+## Runtime dependencies
+
+Installed from their package indexes, not redistributed here.
+
+| Package | Licence |
+|---|---|
+| PyTorch | BSD-3-Clause |
+| Hugging Face `transformers`, `datasets`, `accelerate`, `peft`, `trl` | Apache-2.0 |
+| `bitsandbytes` | MIT |
+| `sentencepiece` | Apache-2.0 |
+| `unsloth`, `unsloth_zoo` (Kaggle training stack) | Apache-2.0 |
+
+Training runs on Kaggle Notebooks under Kaggle's terms for free GPU use.
 
 ---
 
 ## What this repository distributes
 
-- ✅ Original code (MIT).
-- ✅ Our trained **LoRA adapter** (our own copyrightable work; a derivative of
-  Llama, so labeled "Built with Llama").
-- ❌ Never: Meta's base weights, raw copies of the datasets.
+- **Yes:** the original code, under MIT.
+- **Yes, if published:** the trained LoRA adapter — an original work, but a
+  derivative of Llama 3.2 and of CC BY 4.0 material. It must be released as
+  **`Llama-AgentLight`**, accompanied by [NOTICE](NOTICE),
+  [licenses/LLAMA_3.2_COMMUNITY_LICENSE.txt](licenses/LLAMA_3.2_COMMUNITY_LICENSE.txt),
+  and a model card carrying "Built with Llama" — see
+  [MODEL_CARD.md](MODEL_CARD.md), which is ready to use for that purpose.
+- **Never:** Meta's base weights, or raw copies of any dataset.
 
-If you publish the adapter, include: this file, the Llama license, and a
-"Built with Llama" notice on the model card.
+## Corrections
+
+If an attribution here is incomplete or wrong, please open an issue — it will
+be fixed.

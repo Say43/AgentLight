@@ -22,5 +22,11 @@ SOFTWARE.
 
 ---
 NOTE: This MIT license covers ONLY the original code in this repository.
-The base model and datasets it is trained on carry their own licenses and
-are NOT relicensed by this file. See THIRD_PARTY_NOTICES.md.
+
+It does NOT relicense the base model or the datasets the code trains on, and
+it does not extend to any model trained with it: a resulting adapter is a
+derivative of Meta's Llama 3.2 and is governed by the Llama 3.2 Community
+License, a copy of which is in licenses/LLAMA_3.2_COMMUNITY_LICENSE.txt.
+
+Required attribution notices are in NOTICE. The obligations attached to each
+third-party component are documented in THIRD_PARTY_NOTICES.md.
