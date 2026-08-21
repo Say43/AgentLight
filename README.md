@@ -3,17 +3,13 @@
 **Built with Llama**
 
 A **coding agent** built by fine-tuning a vanilla open-weight Llama into a
-reasoning + tool-using model — on a hobbyist Kaggle GPU budget.
+reasoning + tool-using model — on Kaggle GPU budget.
 
 Unlike a from-scratch project, AgentLight starts from a strong pretrained base
 (Llama 3.2 3B Instruct) and *teaches it to reason and act* through a three-stage
 pipeline. The showcase task is verifiable by construction: **given a
 programming problem, the model reasons step by step, writes Python, runs it
 against unit tests, and revises until the tests pass.**
-
-It's a standalone sibling to the earlier `GPTlight` project (which trained a
-97M model from scratch). AgentLight reuses GPTlight's hard-won Kaggle lessons
-(see [docs/PLAN.md](docs/PLAN.md)) but shares no code — it's self-contained.
 
 > **Why a small model can still be a real showcase:** the base 3B model already
 > far outperforms a from-scratch model on every benchmark. The contribution here
