@@ -15,6 +15,25 @@ checkpoints/
   grpo/                   ... phase 3 (the final model to evaluate / ship)
 ```
 
+## Verified local snapshot (2026-08-21)
+
+The private Kaggle kernel `says43/agentlight-train` completed GRPO at the full
+configured budget (`global_step = max_steps = 200`). Its final artifacts were
+merged into this local directory, including `checkpoint-150`, `checkpoint-200`,
+`grpo_metrics.jsonl`, completion parquets through step 200, `rollouts.jsonl`,
+and the corrected `pipeline_state.json` marking every phase complete.
+
+The local top-level `grpo/adapter_model.safetensors` was already byte-identical
+to the Kaggle step-200 adapter (SHA-256
+`C8E997297A3DA6159A4C346C0FDC02678BA5B9DA9A515CCA28B135CB7AE7DE59`).
+The former `grpo_v14` directory contains that same adapter, not a separate model.
+Use `grpo/` as the one canonical evaluation and shipping path.
+
+The 200 logged GRPO steps took 7,607.89 seconds (2.113 hours). These training
+metrics confirm completion, but they are not a substitute for held-out
+HumanEval evaluation; no performance claim should be published until the model
+card's evaluation table is filled with real results.
+
 ## Resuming across Kaggle sessions
 
 A full run doesn't fit one ~12h session. To continue next session:

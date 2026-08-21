@@ -21,11 +21,26 @@ import textwrap
 _CODE_BLOCK = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
+_DEF_LINE = re.compile(r"^\s*(?:async\s+)?def\s+\w+\s*\(", re.MULTILINE)
+
+
 def extract_code(text: str) -> str:
-    """Pull the last ```python block; fall back to text after </think>."""
+    """Pull the FIRST ```python block that defines a function.
+
+    These models reliably emit the real solution first and then tack on a
+    usage demo (`print(foo(...))`) -- sometimes as a separate code block,
+    sometimes as a trailing line. The old 'last block' rule grabbed that demo
+    instead of the function (e.g. the broadband test's fizzbuzz extracted only
+    `print(fizzbuzz(10))`, so a correct function was scored 0). Prefer the
+    first block that actually contains a `def`; fall back to the first block,
+    then to text after </think>, then the raw text.
+    """
     blocks = _CODE_BLOCK.findall(text or "")
     if blocks:
-        return blocks[-1].strip()
+        for block in blocks:
+            if _DEF_LINE.search(block):
+                return block.strip()
+        return blocks[0].strip()
     if "</think>" in text:
         return text.split("</think>", 1)[1].strip()
     return (text or "").strip()

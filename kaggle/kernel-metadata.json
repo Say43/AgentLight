@@ -8,7 +8,7 @@
   "enable_gpu": true,
   "enable_internet": true,
   "machine_shape": "NvidiaTeslaT4",
-  "dataset_sources": [],
+  "dataset_sources": ["says43/agentlight-sft-ckpt"],
   "competition_sources": [],
   "kernel_sources": []
 }

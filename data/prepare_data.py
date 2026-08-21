@@ -19,7 +19,15 @@ import random
 import re
 import os
 
-from datasets import load_dataset
+# `datasets` is a heavy, slow import. Inference-only entrypoints (the chat UI,
+# the ReAct agent) import this module ONLY for the prompt-string constants
+# below, not to load data — so defer the real import into a thin wrapper that
+# runs on first actual use (training). This keeps `python chat/chat_ui.py`
+# startup from pulling in the whole datasets stack.
+def load_dataset(*args, **kwargs):
+    from datasets import load_dataset as _load_dataset
+    return _load_dataset(*args, **kwargs)
+
 
 # Shared format contract. Every phase reinforces the same behaviour: reason
 # inside <think>, then emit exactly one ```python code block.

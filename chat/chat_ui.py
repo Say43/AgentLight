@@ -28,13 +28,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.react_agent import load_model  # noqa: E402
 
-# Keep the <think> habit (so the reasoning panel has something to show) but,
-# unlike the training-time code prompt, don't force a Python code block — this
-# is a general chat that can also answer in prose.
+# NOTE: we deliberately do NOT ask the model to "think inside <think> tags"
+# anymore. The GRPO-finished v14 checkpoint lost the ability to open real
+# <think> blocks and instead parrots the literal word ("Think think think…"),
+# which then leaks into the answer channel as degenerate spam. Dropping the
+# instruction removes that trigger. The ThinkRenderer/Printer machinery below
+# is kept intact, so if a future checkpoint spontaneously emits proper <think>
+# </think> tags the reasoning panel still lights up — we just don't demand it.
 CHAT_SYSTEM_PROMPT = (
-    "You are AgentLight, a careful assistant. Think step by step inside "
-    "<think> </think> tags, then give your final answer. When the task is to "
-    "write code, put the final solution in a Python code block."
+    "You are AgentLight, a careful coding assistant. Answer directly and "
+    "concisely. When the task is to write code, put the final solution in a "
+    "single Python code block."
 )
 
 

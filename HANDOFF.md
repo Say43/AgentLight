@@ -1,56 +1,106 @@
-# AgentLight run handoff
+# AgentLight — handoff
 
-Updated: 2026-07-21
+Updated: 2026-08-21
 
-## Current status
+The training-state ambiguity is resolved. The private Kaggle kernel
+`says43/agentlight-train` completed successfully, including GRPO at the configured
+200 steps. Do **not** launch another GRPO run merely because the old local
+`pipeline_state.json` omitted `grpo`; that marker was stale.
 
-The local code-path blockers found in the pre-run review are addressed in the
-working tree, but the GPU stack has **not yet been validated on Kaggle**. Do not
-start the full 16-hour run before the smoke kernel succeeds.
+## 1. Verified training state
 
-Locally verified:
+The latest Kaggle output was downloaded and inspected directly. It contains:
 
-- all Python files compile;
-- all four offline regression tests in `tests/test_core.py` pass;
-- the reward self-test gives 1.0 for correct code and 0.0 for wrong code and a
-  forged `SCORE=...`/early-exit attempt;
-- `AGENTLIGHT_SMOKE=1` reduces all datasets, steps and completion length;
-- `WORLD_SIZE=2` halves gradient accumulation and preserves the global batch;
-- Kaggle metadata now points to `run.py`;
-- smoke outputs use `smoke_checkpoints/`, separate from real resumable state.
+- `checkpoints/grpo/checkpoint-150/` and `checkpoint-200/`, including optimizer,
+  scheduler, RNG, scaler, trainer state, tokenizer and adapter files;
+- a final top-level `checkpoints/grpo/` adapter and tokenizer;
+- 200 rows in `grpo_metrics.jsonl` and completion snapshots through
+  `completions_00200.parquet`;
+- `pipeline_state.json` listing all four phases as complete: `reasoning_sft`,
+  `repair_sft`, `general_sft`, and `grpo`.
 
-Still requires external validation:
+`checkpoint-200/trainer_state.json` is conclusive:
 
-- `https://github.com/Say43/AgentLight.git` currently returns "Repository not
-  found" without credentials, and this local repository has no remote. Kaggle
-  cannot clone the project until a reachable repository is created/pushed.
-- The pinned Kaggle candidate stack (`unsloth==2026.7.4`,
-  `unsloth_zoo==2026.7.3`, `trl==1.8.0`) must pass the exact T4 x2 smoke run.
-- No full dataset download, CUDA model load, SFT step or GRPO step has been run
-  in the local Windows environment.
+```text
+global_step: 200
+max_steps:   200
+epoch:       0.5847953216374269
+```
 
-## Required order before the real run
+The final adapter was not actually missing locally. Its SHA-256 is identical in
+all of these locations:
 
-1. Create/push the repository at the URL in `kaggle/run.py`, branch `main`, or
-   change `REPO_URL` to the actual reachable repository.
-2. Keep the already-safe `SMOKE = True` setting in `kaggle/run.py`, commit and
-   push the current working tree.
-3. Push the Kaggle kernel with `kaggle kernels push -p kaggle`, select **T4 x2**
-   and keep internet enabled.
-4. Require all three phases to finish. Check the log for `pip check`, two
-   torchrun ranks, non-empty post-length-filter datasets, finite losses, GRPO
-   reward metrics, and saved adapters under `smoke_checkpoints/`.
-5. If smoke succeeds, set `SMOKE = False`, commit/push, then start the real run.
-6. Do not attach smoke output as resume data. For a second real session, attach
-   only the previous real `checkpoints/` kernel output; `restore_checkpoints()`
-   locates and restores its `pipeline_state.json` automatically.
-7. Run full final evaluation with all 164 HumanEval tasks. Treat `--agentic`
-   and `--tts` as public-doctest-assisted modes; hidden checks are final grading
-   only.
+```text
+C8E997297A3DA6159A4C346C0FDC02678BA5B9DA9A515CCA28B135CB7AE7DE59
+  local checkpoints/grpo/adapter_model.safetensors
+  local checkpoints/grpo_v14/adapter_model.safetensors
+  Kaggle checkpoints/grpo/adapter_model.safetensors
+  Kaggle checkpoints/grpo/checkpoint-200/adapter_model.safetensors
+```
 
-## Stop conditions during GRPO
+Therefore `grpo_v14` is not an alternative model and `grpo/` is not a 100-step
+adapter. Both local adapter files were already the final step-200 export; only
+the local evidence/resume files and completion marker were outdated. The latest
+Kaggle artifacts have now been merged additively into local `checkpoints/`.
+Older checkpoint-50/100 directories are retained as history.
 
-Stop rather than spending the remaining quota when rewards are non-finite,
-almost every group has zero reward variance, completion truncation stays high,
-or a held-out evaluation after the pilot slice does not improve over the SFT
-checkpoint.
+## 2. Measured GRPO run
+
+The run took **7,607.89 logged seconds = 126.80 minutes = 2.113 hours** across
+200 steps, averaging 38.04 seconds per step. This supersedes the old planning
+estimate of 5–6 hours.
+
+Basic telemetry:
+
+| Signal | Result |
+|---|---:|
+| Logged steps | 200 (1 through 200) |
+| Mean reward, first 20 steps | 0.24375 |
+| Mean reward, last 20 steps | 0.35000 |
+| Mean reward, full run | 0.44188 |
+| All-zero-variance steps | 89 / 200 |
+| Non-finite reward rows | 0 |
+| Mean truncation, last 20 steps | 0 |
+| Peak logged VRAM | 3.776 GB |
+
+This proves that GRPO ran and updated the adapter between checkpoint 150 and
+200 (their hashes differ). It does **not** prove that the final adapter improves
+held-out HumanEval performance. The reward trend is mildly positive, but 89
+zero-variance steps are inefficient and the previously observed “Think”
+repetition remains a checkpoint-quality warning until evaluation.
+
+## 3. Current working-tree changes
+
+Preserve and review the existing uncommitted edits:
+
+- `agent/executor.py` — code extraction now prefers the first fenced block that
+  actually defines a function;
+- `chat/chat_ui.py` — no longer prompts the known-degenerate adapter to emit
+  literal `<think>` text;
+- `data/prepare_data.py` — lazy-imports `datasets` for faster inference startup;
+- `kaggle/kernel-metadata.json` — attaches the private checkpoint dataset;
+- `HANDOFF.md` and `checkpoints/README.md` — record the verified completed run.
+
+Do not discard unrelated user changes. Run the tests before committing these
+files, and commit only after reviewing the final diff.
+
+## 4. Remaining work for a publishable portfolio project
+
+Training is complete. The critical path is now evaluation and reporting:
+
+1. Sanity-test `checkpoints/grpo/` interactively for repetition or malformed
+   answers. `grpo_v14` need not be tested separately because it is byte-identical.
+2. Run `src/eval_code.py` with the same full 164-task HumanEval setup for the
+   base model, `reasoning_sft`, `general_sft`, and final `grpo` adapter.
+3. Evaluate the final adapter both single-shot and agentically; also run the
+   configured test-time-scaling variant (`--tts --k 4`).
+4. Fill the placeholder table in `MODEL_CARD.md` with real results and update
+   the README status. Do not claim improvement before these held-out numbers
+   exist.
+5. If the adapter is published, follow `checkpoints/README.md`: name it
+   `Llama-AgentLight`, ship the model card, `NOTICE`, and the Llama license, and
+   never redistribute Meta base weights.
+
+The repository remote is `https://github.com/Say43/AgentLight.git`. Model
+artifacts under `checkpoints/` are intentionally gitignored, so the tracked
+handoff and checkpoint README are the durable record of this verification.
